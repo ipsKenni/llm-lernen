@@ -1,5 +1,6 @@
-// Schritt 10 – Ins trainierte Llama-Modell hineinschauen.
-import { createHeatmap, createScatter, renderProbBars, renderTiles, pct } from '../viz.js';
+// Schritt 10 – Live-Übersicht (live.js) und „Selbst ausprobieren“ mit eigenem Text.
+import { createHeatmap, renderProbBars, renderTiles, pct } from '../viz.js';
+import { initLive } from './live.js';
 import { part2 } from './teil2.js';
 
 const START = {
@@ -25,7 +26,7 @@ export function init(root) {
   let labels = [];   // Anzeigetext für jedes Token-ID (für die Balken)
 
   async function refresh() {
-    if (!S.setup || S.step === 0) return;
+    if (!S.setup) return;
     if (busy) { again = true; return; }
     busy = true;
     try {
@@ -76,23 +77,8 @@ export function init(root) {
     });
   }
 
-  // --- Token-Karte -------------------------------------------------------
-  const scatter = createScatter($('#in-map'), {
-    height: 460,
-    labelIf: (p, i) => (p.merged ? i < 94 + 120 : /[a-zA-Z0-9]/.test(p.label)),
-  });
-  async function drawMap() {
-    $('#in-map-status').textContent = 'Berechne die Karte …';
-    const { points } = await p2.trainer.embeddings(500);
-    scatter.update(points);
-    $('#in-map-status').textContent = `${points.length} Tokens. Fahr über einen Punkt, um zu sehen, welches Token es ist.`;
-  }
-
   function render() {
-    const ready = !!S.setup && S.step > 0;
-    $('#in-none').hidden = ready;
-    $('#in-main').hidden = !ready;
-    if (!ready) return;
+    if (!S.setup || !S.tokenizer) return;   // Sichtbarkeit regelt live.js
     if (lastDataset !== S.dataset) {
       lastDataset = S.dataset;
       input.value = START[S.dataset] || S.samples.at(-1)?.text.slice(0, 40) || '';
@@ -104,10 +90,10 @@ export function init(root) {
   let typing = 0;
   input.addEventListener('input', () => { clearTimeout(typing); typing = setTimeout(refresh, 250); });
   layerSel.addEventListener('change', drawAttention);
-  $('#in-map-run').addEventListener('click', drawMap);
-  p2.on((what) => { if (['setup', 'restored', 'done', 'finetune'].includes(what)) render(); });
+  p2.on((what) => { if (['setup', 'restored', 'done', 'finetune', 'snapshot'].includes(what)) render(); });
   render();
-  api = { render };
+  const live = initLive(root);
+  api = { render: () => { render(); live.render(); } };
 }
 
 // Bei jedem Öffnen mit dem aktuellen Trainingsstand neu rechnen.

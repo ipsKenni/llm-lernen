@@ -8,7 +8,8 @@ import { createCpuBackend } from './backend-cpu.js';
 import { createWebGpuBackend, ENGINE_VERSION } from './backend-webgpu.js';
 import { createLlama } from './model.js';
 import { DATASETS, splitDocs, buildStreams, sampleBatch, learningRate } from './data.js';
-import { generate, createInference } from './infer.js';
+import { generate, createInference, continuationProbability } from './infer.js';
+import { findProbes } from './probes.js';
 import { writeGGUF, readGGUF, makeModelfile, roundTripParams } from './gguf.js';
 import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from './checkpoint.js';
 import { makeRng } from '../rng.js';
@@ -19,10 +20,24 @@ const S = {
   preset: null, cfg: null, backend: null, model: null, rng: makeRng(1),
   step: 0, total: 1000, maxLr: 1e-3, running: false, history: [], evals: [], samples: [],
   phaseStart: 0, ft: null,   // Fine-Tuning: ab welchem Schritt die neue Phase läuft
+  probes: [], probeText: '', probeSet: 0, snapshots: [], axes: null,   // Live-Übersicht
   paramsCache: null, paramsStep: -1,
 };
 
 const post = (msg, transfer) => postMessage(msg, transfer || []);
+
+// Fester Prüftext für „Nächstes Token“ und Attention in der Live-Übersicht
+const PROBE_TEXT = {
+  maerchen: 'Es war einmal ein König, der hatte drei',
+  tinystories: 'Once upon a time, there was a little girl named',
+  namen: 'emma\nolivia\nava\n',
+};
+
+function setProbes(docs) {
+  S.probes = findProbes(docs);
+  S.probeText = PROBE_TEXT[S.dataset] || docs[0].slice(0, 60).replace(/\s+\S*$/, '');
+  S.probeSet += 1;
+}
 
 async function loadText(datasetKey, uploadText) {
   const ds = DATASETS[datasetKey];
@@ -47,6 +62,9 @@ async function tokenize({ dataset, text, vocabSize }) {
   if (batch.length) post({ type: 'merges', items: batch });
   Object.assign(S, { dataset, uploadText: dataset === 'upload' ? raw : '', tok, docsCount: docs.length, chars: docs.reduce((s, d) => s + d.length, 0) });
   S.streams = buildStreams(docs, tok);
+  setProbes(docs);
+  S.snapshots = [];
+  S.axes = null;
   S.model = null;
   S.step = 0;
   return {
@@ -68,7 +86,7 @@ async function setup({ preset, prefer = 'auto' }) {
   S.model = createLlama(S.cfg, S.backend, { batch: p.batch });
   S.model.setParams(S.model.initialParams(1));
   S.tuning = (await S.backend.autotune?.(S.model.matmulShapes())) ?? null;
-  Object.assign(S, { step: 0, history: [], evals: [], samples: [], paramsCache: null, paramsStep: -1, rng: makeRng(7), phaseStart: 0, ft: null });
+  Object.assign(S, { step: 0, history: [], evals: [], samples: [], paramsCache: null, paramsStep: -1, rng: makeRng(7), phaseStart: 0, ft: null, snapshots: [], axes: null });
   return describe();
 }
 
@@ -77,6 +95,7 @@ function describe() {
     backend: S.backend.kind, adapter: S.backend.adapterInfo || null, preset: S.preset, cfg: S.cfg,
     nParams: countParams(S.cfg), batch: S.model.batch, step: S.step, total: S.total,
     dataset: S.dataset, history: S.history, evals: S.evals, samples: S.samples, ft: S.ft,
+    probes: S.probes, probeText: S.probeText, probeSet: S.probeSet, snapshots: S.snapshots,
     tokenizer: { vocab: S.tok.vocabSize }, trainTokens: S.streams?.train.length ?? 0,
   };
 }
@@ -107,7 +126,32 @@ async function evaluate() {
   S.evals.push({ step: S.step, valLoss });
   S.samples.push(sample);
   post({ type: 'eval', step: S.step, valLoss, sample });
+  await snapshot(valLoss);
 }
+
+//#region llama-snapshot
+// Eine Momentaufnahme für die Live-Übersicht: Was kann das Modell gerade?
+async function snapshot(valLoss = S.evals.at(-1)?.valLoss ?? null) {
+  const { cfg, tok } = S;
+  const params = await currentParams();
+  const inf = createInference(cfg, params);
+  const prompt = DATASETS[S.dataset].prompt || S.probeText.split(' ').slice(0, 3).join(' ');
+  // Temperatur 0: Unterschiede zwischen zwei Aufnahmen kommen nur vom Lernen, nicht vom Zufall.
+  const greedy = tok.decode(generate(cfg, params, tok, prompt, { maxTokens: 24, temperature: 0 }));
+  const probes = S.probes.map((p) => continuationProbability(cfg, params, tok, p.prefix, p.target, inf));
+  const look = await inspect({ prompt: S.probeText });
+  const top = look.probs.map((p, id) => [p, id]).sort((a, b) => b[0] - a[0]).slice(0, 8).map(([p, id]) => ({ id, p }));
+  const lastLayer = look.attn[look.attn.length - 1].map((head) => head.map((row) => row.map((w) => Math.round(w * 1000) / 1000)));
+  const { points } = await embeddingMap({ limit: 300, align: true });
+  const snap = {
+    step: S.step, valLoss, prompt, greedy, probes, probeSet: S.probeSet, top, attn: lastLayer, labels: look.labels,
+    map: { ids: points.map((p) => p.id), xs: points.map((p) => Math.round(p.x * 1e4) / 1e4), ys: points.map((p) => Math.round(p.y * 1e4) / 1e4) },
+  };
+  S.snapshots.push(snap);
+  post({ type: 'snapshot', snapshot: snap });
+  return snap;
+}
+//#endregion
 
 async function save() {
   if (!S.model) return;
@@ -118,6 +162,7 @@ async function save() {
     tokenizer: { tokens: S.tok.tokens, merges: S.tok.merges }, params, m, v,
     step: S.step, total: S.total, maxLr: S.maxLr, history: S.history, evals: S.evals, samples: S.samples,
     phaseStart: S.phaseStart, ft: S.ft,
+    probes: S.probes, probeText: S.probeText, probeSet: S.probeSet, snapshots: S.snapshots, axes: S.axes,
   });
   post({ type: 'saved', step: S.step });
 }
@@ -134,6 +179,8 @@ async function restore(key = CHECKPOINT) {
   S.model.setParams(c.params);
   S.model.setOptState(c.m, c.v);
   Object.assign(S, { step: c.step, total: c.total, maxLr: c.maxLr, history: c.history, evals: c.evals, samples: c.samples, paramsCache: null, phaseStart: c.phaseStart ?? 0, ft: c.ft ?? null });
+  if (c.probes) Object.assign(S, { probes: c.probes, probeText: c.probeText, probeSet: c.probeSet, snapshots: c.snapshots || [], axes: c.axes || null });
+  else setProbes(docs);
   return { ...describe(), tokens: S.tok.tokens, merges: S.tok.merges, docs: docs.length, chars: S.chars, trainTokens: S.streams.train.length, valTokens: S.streams.val.length };
 }
 
@@ -145,6 +192,7 @@ async function trainLoop() {
   let t0 = performance.now(), stepsSince = 0, lastSave = performance.now();
   // Bis zu zwei Schritte gleichzeitig unterwegs: Während die GPU rechnet,
   // bereitet JavaScript schon den nächsten Batch vor (Pipelining).
+  if (S.snapshots.length === 0) await evaluate();   // Ausgangslage vor dem Training festhalten
   const pending = [];
   const settle = async () => {
     const loss = await pending.shift();
@@ -310,7 +358,7 @@ async function inspect({ prompt }) {
 // Jedes Token ist ein Punkt in einem Raum mit dim Dimensionen (bei „Klein“: 256).
 // Eine Hauptkomponentenanalyse (PCA) sucht die zwei Richtungen, in denen sich die
 // Punkte am stärksten unterscheiden, und projiziert alles auf diese Ebene.
-async function embeddingMap({ limit = 500 }) {
+async function embeddingMap({ limit = 500, align = false }) {
   const { cfg, tok } = S;
   const params = await currentParams();
   const d = cfg.dim;
@@ -336,7 +384,17 @@ async function embeddingMap({ limit = 500 }) {
     }
     return v;
   };
-  const v1 = power(null), v2 = power(v1);
+  let v1 = power(null), v2 = power(v1);
+  // Eigenvektoren haben kein festes Vorzeichen. Damit die Live-Karte nicht hin- und
+  // herklappt, drehen wir sie so, dass sie zum vorigen Stand passen.
+  if (align) {
+    const dot = (a, b) => a.reduce((s2, x, i) => s2 + x * b[i], 0);
+    if (S.axes?.v1.length === d) {
+      if (dot(v1, S.axes.v1) < 0) v1 = v1.map((x) => -x);
+      if (dot(v2, S.axes.v2) < 0) v2 = v2.map((x) => -x);
+    }
+    S.axes = { v1, v2 };
+  }
   const proj = (x, v) => x.reduce((s, xi, i) => s + xi * v[i], 0);
   return { points: ids.map((id, k) => ({ id, label: tok.display(id), x: proj(X[k], v1), y: proj(X[k], v2), merged: id >= 256 })) };
 }
@@ -360,6 +418,7 @@ async function finetunePrepare({ dataset, text, steps }) {
   const from = S.ft?.from ?? S.dataset;
   Object.assign(S, { dataset, uploadText: dataset === 'upload' ? raw : '' });
   S.streams = buildStreams(docs, S.tok);
+  setProbes(docs);
   const n = S.model.layout.total;
   S.model.setOptState(new Float32Array(n), new Float32Array(n));
   S.maxLr = PRESETS[S.preset].lr * 0.3;
@@ -446,6 +505,10 @@ onmessage = async (e) => {
       }
       case 'export': { const r = await exportModel(msg); reply(r, [r.gguf.buffer]); break; }
       case 'inspect': reply(await inspect(msg)); break;
+      case 'snapshot':
+        if (S.running) throw new Error('Während des Trainings kommen die Aufnahmen von selbst.');
+        reply({ snapshot: await snapshot() });
+        break;
       case 'embeddings': reply(await embeddingMap(msg)); break;
       case 'benchmark':
         if (S.running) throw new Error('Während des Trainings kann nicht gemessen werden. Pausiere zuerst.');

@@ -459,6 +459,31 @@ output { font-family: var(--font-mono); color: var(--ink); min-width: 2.5em; }
 .os-tabs { margin: 10px 0 0; }
 .ref-output { font-family: var(--font-mono); font-size: 0.92rem; background: var(--sunken); padding: 2px 6px; border-radius: 4px; white-space: pre-wrap; }
 
+/* ---------------------------------------------------------- Live-Übersicht */
+.live-status { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px 20px; margin: 20px 0; }
+.live-progress { height: 8px; background: var(--sunken); border-radius: 999px; overflow: hidden; }
+.live-progress span { display: block; height: 100%; width: 0; background: var(--fwd); border-radius: 999px; transition: width 300ms ease-out; }
+.live-status .stats { margin-top: 12px; }
+.live-status .toolbar { margin-bottom: 0; }
+.live-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin: 0 0 32px; }
+.live-tile { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; min-width: 0; }
+.live-tile > .panel-h:first-child { margin-top: 0 !important; }
+.live-wide { grid-column: 1 / -1; }
+.live-timeline { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
+.live-timeline li { display: grid; grid-template-columns: 7.5em minmax(0, 1fr); gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--grid); }
+.live-timeline li:last-child { border-bottom: 0; }
+.live-timeline .when { color: var(--muted); font-size: 0.85rem; padding-top: 2px; }
+.live-timeline .what { white-space: pre-wrap; }
+.live-timeline li:last-child .what { font-weight: 700; }
+.live-probes { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+.live-probes li { display: grid; grid-template-columns: minmax(0, 1fr) 3.5em; grid-template-areas: "phrase phrase" "bar val" "spark spark"; gap: 2px 10px; align-items: center; }
+.probe-phrase { grid-area: phrase; font-size: 0.95rem; }
+.probe-phrase span { color: var(--muted); }
+.live-probes .pbar-track { grid-area: bar; height: 12px; background: var(--sunken); border-radius: 0 4px 4px 0; }
+.live-probes .pbar-val { grid-area: val; }
+.sparkline { grid-area: spark; width: 100%; height: 28px; display: block; }
+.live-tile .att-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+
 /* ---------------------------------------------------------- Blättern */
 .pager { display: flex; justify-content: space-between; gap: 16px; margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--line); }
 .pager-link { display: flex; flex-direction: column; text-decoration: none; padding: 8px 0; max-width: 48%; }
@@ -483,6 +508,7 @@ output { font-family: var(--font-mono); color: var(--ink); min-width: 2.5em; }
   .steps-nav ol { display: flex; gap: 4px; flex: none; }
   .nav-part { display: none; }
   .rope-demo { grid-template-columns: minmax(0, 1fr); }
+  .live-grid { grid-template-columns: minmax(0, 1fr); }
   .steps-nav a { margin: 0; white-space: nowrap; padding: 6px 8px; }
   .steps-nav a:not([aria-current='step']) span:last-child { display: none; }
   .nav-status { display: none; }

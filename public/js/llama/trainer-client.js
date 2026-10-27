@@ -48,6 +48,7 @@ export function createTrainerClient() {
     reset: () => request({ type: 'reset' }),
     benchmark: (presets, prefer, vocab) => request({ type: 'benchmark', presets, prefer, vocab }),
     inspect: (prompt) => request({ type: 'inspect', prompt }),
+    snapshot: () => request({ type: 'snapshot' }),
     finetune: (dataset, steps, text = '') => request({ type: 'finetune', dataset, steps, text }),
     revert: () => request({ type: 'revert' }),
     embeddings: (limit = 500) => request({ type: 'embeddings', limit }),

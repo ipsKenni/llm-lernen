@@ -35,7 +35,7 @@ const STEPS = [
   { title: 'Tokenizer', mod: bpeStep },
   { title: 'Bauplan', mod: bauplan },
   { title: 'Training', mod: llamaTraining },
-  { title: 'Hineinschauen', mod: hineinschauen },
+  { title: 'Live-Übersicht', mod: hineinschauen },
   { title: 'Fine-Tuning', mod: finetuning },
   { title: 'Ab nach Ollama', mod: ollamaExport },
   { title: 'Wie geht es weiter?', mod: null },

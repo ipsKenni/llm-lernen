@@ -276,8 +276,10 @@ export function createLineChart(canvas, { references = [], xLabel = 'Schritt', h
       ctx.setLineDash([]);
       ctx.fillStyle = muted;
       ctx.textAlign = 'right';
-      ctx.textBaseline = 'bottom';
-      ctx.fillText(`${r.label} ${fmt(r.value, 2)}`, w - m.r - 4, Y(r.value) - 3);
+      // Zu nah am oberen Rand? Dann die Beschriftung unter die Linie setzen.
+      const below = Y(r.value) - m.t < 16;
+      ctx.textBaseline = below ? 'top' : 'bottom';
+      ctx.fillText(`${r.label} ${fmt(r.value, 2)}`, w - m.r - 4, Y(r.value) + (below ? 3 : -3));
     }
     // Serien
     for (const s of series) {
@@ -392,6 +394,10 @@ export function createScatter(canvas, { height = 420, labelIf = () => false } = 
   let points = [];
   let placed = [];
   let hover = -1;
+  let from = null;            // Bildschirmpositionen des vorigen Stands (für die Animation)
+  let t0 = 0;
+  const DURATION = 700;
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   function draw() {
     const { ctx, w, h } = setupCanvas(canvas, () => height);
@@ -401,7 +407,15 @@ export function createScatter(canvas, { height = 420, labelIf = () => false } = 
     const [x0, x1] = [Math.min(...xs), Math.max(...xs)], [y0, y1] = [Math.min(...ys), Math.max(...ys)];
     const X = (v) => pad + ((v - x0) / (x1 - x0 || 1)) * (w - 2 * pad);
     const Y = (v) => h - pad - ((v - y0) / (y1 - y0 || 1)) * (h - 2 * pad);
-    placed = points.map((p) => [X(p.x), Y(p.y)]);
+    const target = points.map((p) => [X(p.x), Y(p.y)]);
+    // Während der Animation gleiten die Punkte vom alten zum neuen Ort.
+    const k = from ? Math.min(1, (performance.now() - t0) / DURATION) : 1;
+    const ease = 1 - (1 - k) ** 3;
+    placed = target.map(([x, y], i) => {
+      const old = from?.get(points[i].id);
+      return old ? [old[0] + (x - old[0]) * ease, old[1] + (y - old[1]) * ease] : [x, y];
+    });
+    if (from && k < 1) requestAnimationFrame(draw); else from = null;
     const fwd = cssVar('--fwd'), muted = cssVar('--muted'), ink = cssVar('--ink'), surface = cssVar('--surface');
     ctx.font = `12px ${cssVar('--font-mono')}`;
     ctx.textBaseline = 'middle';
@@ -435,5 +449,33 @@ export function createScatter(canvas, { height = 420, labelIf = () => false } = 
   });
   canvas.addEventListener('pointerleave', () => { hover = -1; hideTooltip(); draw(); });
   onResize(canvas, draw);
-  return { update(p) { points = p; hover = -1; draw(); } };
+  return {
+    update(p, { animate = false } = {}) {
+      if (animate && !reduced && placed.length) {
+        from = new Map(points.map((q, i) => [q.id, placed[i]]));
+        t0 = performance.now();
+      }
+      points = p;
+      hover = -1;
+      draw();
+    },
+  };
+}
+
+// Kleiner Verlauf ohne Achsen (für „Was es schon kann“). values zwischen 0 und max.
+export function drawSparkline(canvas, values, { max = 1, height = 28 } = {}) {
+  const { ctx, w, h } = setupCanvas(canvas, () => height);
+  if (values.length < 2) return;
+  const X = (i) => 2 + (i / (values.length - 1)) * (w - 4);
+  const Y = (v) => h - 3 - (Math.min(v, max) / max) * (h - 6);
+  ctx.strokeStyle = cssVar('--fwd');
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  values.forEach((v, i) => (i ? ctx.lineTo(X(i), Y(v)) : ctx.moveTo(X(i), Y(v))));
+  ctx.stroke();
+  ctx.fillStyle = ctx.strokeStyle;
+  ctx.beginPath();
+  ctx.arc(X(values.length - 1), Y(values.at(-1)), 3, 0, 2 * Math.PI);
+  ctx.fill();
 }

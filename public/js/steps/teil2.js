@@ -13,6 +13,7 @@ export function part2() {
     dataset: 'maerchen', vocab: DATASETS.maerchen.vocab, preset: DATASETS.maerchen.preset, total: 2000,
     tokInfo: null, tokenizer: null, gpu: undefined,
     setup: null, running: false, step: 0, losses: [], evals: [], samples: [], ft: null,
+    snapshots: [], probes: [], probeText: '', probeSet: 0,
     stepsPerSec: 0, tokensPerSec: 0, lr: 0, savedStep: 0, error: '',
   };
   const emit = (what) => listeners.forEach((fn) => fn(what, state));
@@ -24,6 +25,9 @@ export function part2() {
     } else if (m.type === 'eval') {
       state.evals.push({ step: m.step, valLoss: m.valLoss });
       state.samples.push(m.sample);
+    } else if (m.type === 'snapshot') {
+      state.snapshots.push(m.snapshot);
+      if (m.snapshot.probeSet !== state.probeSet) state.probeSet = m.snapshot.probeSet;
     } else if (m.type === 'state') {
       state.running = m.running;
     } else if (m.type === 'saved') {
@@ -43,6 +47,7 @@ export function part2() {
     Object.assign(state, {
       setup: s, preset: s.preset, step: s.step, total: s.total, dataset: s.dataset, ft: s.ft ?? null,
       losses: s.history.slice(), evals: s.evals.slice(), samples: s.samples.slice(),
+      snapshots: (s.snapshots || []).slice(), probes: s.probes || [], probeText: s.probeText || '', probeSet: s.probeSet || 0,
     });
   }
 

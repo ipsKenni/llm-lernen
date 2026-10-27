@@ -176,3 +176,29 @@ test('Q8_0: Fehler etwa ein halber Schritt, Writer-Größen stimmen', async () =
   for (let i = 0; i < params.length; i++) worst = Math.max(worst, Math.abs(rt[i] - params[i]));
   console.log(`  Dateigrößen: F32 ${f32} B, F16 ${f16.length} B, Q8_0 ${q8.length} B; größter Rundungsfehler ${worst.toExponential(2)}`);
 });
+
+test('Live-Übersicht: Fortsetzungs-Wahrscheinlichkeit passt zum Trainings-Loss', async () => {
+  const { continuationProbability } = await import('../public/js/llama/infer.js');
+  const tok = trainBPE(['es war einmal ein könig', 'der hatte drei töchter'], 300);
+  const text = 'es war einmal';
+  const ids = [tok.eot, ...tok.encode(text)];
+  const T = ids.length - 1;
+  const cfg = { ...TINY, vocabSize: tok.vocabSize, ctx: T };
+  const model = createLlama(cfg, createCpuBackend(Float64Array), { batch: 1 });
+  const p = Float64Array.from(model.initialParams(2), (x) => x * 6);
+  model.setParams(p);
+  model.setBatch(Int32Array.from(ids.slice(0, T)), Int32Array.from(ids.slice(1)));
+  const loss = await model.loss();                       // mittlere Cross-Entropy über alle T Positionen
+  const prob = continuationProbability({ ...cfg, ctx: T + 1 }, Float32Array.from(p), tok, '', text);
+  console.log(`  P aus dem Loss ${Math.exp(-T * loss).toExponential(4)} | per Teacher Forcing ${prob.toExponential(4)}`);
+  assert.ok(Math.abs(Math.log(prob) + T * loss) < 1e-3);
+});
+
+test('Live-Übersicht: typische Wendungen in den Märchen', async () => {
+  const { findProbes } = await import('../public/js/llama/probes.js');
+  const { splitDocs } = await import('../public/js/llama/data.js');
+  const probes = findProbes(splitDocs('maerchen', readFileSync(new URL('../public/data/maerchen.txt', import.meta.url), 'utf8')));
+  assert.equal(probes.length, 5);
+  assert.ok(probes.some((p) => p.prefix === 'Es war einmal' && p.target === ' ein'));
+  for (const p of probes) assert.ok(p.target.startsWith(' ') && p.share > 0.5);
+});

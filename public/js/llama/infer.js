@@ -146,3 +146,25 @@ export function generate(cfg, params, tok, prompt, { maxTokens = 200, onToken, .
   }
   return out;
 }
+
+//#region infer-probe
+// Wie wahrscheinlich findet das Modell eine bestimmte Fortsetzung?
+// „Teacher Forcing“: Wir geben den richtigen Text Token für Token vor und
+// multiplizieren die Wahrscheinlichkeiten, die das Modell jeweils dafür hatte.
+//   P(„ einmal“ | „Es war“) = P(Token₁ | „Es war“) · P(Token₂ | „Es war“ + Token₁) · …
+export function continuationProbability(cfg, params, tok, prefix, continuation, inf = createInference(cfg, params)) {
+  const pre = [tok.eot, ...tok.encode(prefix)];
+  const ids = [...pre, ...tok.encode(continuation)].slice(0, cfg.ctx);
+  let logProb = 0;
+  for (let pos = 0; pos < ids.length - 1; pos++) {
+    const logits = inf.step(ids[pos], pos);
+    if (pos < pre.length - 1) continue;          // nur die Fortsetzung zählt
+    let max = -Infinity;
+    for (let i = 0; i < logits.length; i++) if (logits[i] > max) max = logits[i];
+    let sum = 0;
+    for (let i = 0; i < logits.length; i++) sum += Math.exp(logits[i] - max);
+    logProb += logits[ids[pos + 1]] - max - Math.log(sum);
+  }
+  return Math.exp(logProb);
+}
+//#endregion
