@@ -47,6 +47,10 @@ export function createTrainerClient() {
     exportModel: (name, format = 'f32') => request({ type: 'export', name, format }),
     reset: () => request({ type: 'reset' }),
     benchmark: (presets, prefer, vocab) => request({ type: 'benchmark', presets, prefer, vocab }),
+    inspect: (prompt) => request({ type: 'inspect', prompt }),
+    finetune: (dataset, steps, text = '') => request({ type: 'finetune', dataset, steps, text }),
+    revert: () => request({ type: 'revert' }),
+    embeddings: (limit = 500) => request({ type: 'embeddings', limit }),
     on: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
   };
 }

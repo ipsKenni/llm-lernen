@@ -8,7 +8,7 @@ import { createCpuBackend } from './backend-cpu.js';
 import { createWebGpuBackend, ENGINE_VERSION } from './backend-webgpu.js';
 import { createLlama } from './model.js';
 import { DATASETS, splitDocs, buildStreams, sampleBatch, learningRate } from './data.js';
-import { generate } from './infer.js';
+import { generate, createInference } from './infer.js';
 import { writeGGUF, readGGUF, makeModelfile, roundTripParams } from './gguf.js';
 import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from './checkpoint.js';
 import { makeRng } from '../rng.js';
@@ -18,6 +18,7 @@ const S = {
   dataset: null, uploadText: '', tok: null, streams: null, docsCount: 0, chars: 0,
   preset: null, cfg: null, backend: null, model: null, rng: makeRng(1),
   step: 0, total: 1000, maxLr: 1e-3, running: false, history: [], evals: [], samples: [],
+  phaseStart: 0, ft: null,   // Fine-Tuning: ab welchem Schritt die neue Phase läuft
   paramsCache: null, paramsStep: -1,
 };
 
@@ -67,7 +68,7 @@ async function setup({ preset, prefer = 'auto' }) {
   S.model = createLlama(S.cfg, S.backend, { batch: p.batch });
   S.model.setParams(S.model.initialParams(1));
   S.tuning = (await S.backend.autotune?.(S.model.matmulShapes())) ?? null;
-  Object.assign(S, { step: 0, history: [], evals: [], samples: [], paramsCache: null, paramsStep: -1, rng: makeRng(7) });
+  Object.assign(S, { step: 0, history: [], evals: [], samples: [], paramsCache: null, paramsStep: -1, rng: makeRng(7), phaseStart: 0, ft: null });
   return describe();
 }
 
@@ -75,7 +76,7 @@ function describe() {
   return {
     backend: S.backend.kind, adapter: S.backend.adapterInfo || null, preset: S.preset, cfg: S.cfg,
     nParams: countParams(S.cfg), batch: S.model.batch, step: S.step, total: S.total,
-    dataset: S.dataset, history: S.history, evals: S.evals, samples: S.samples,
+    dataset: S.dataset, history: S.history, evals: S.evals, samples: S.samples, ft: S.ft,
     tokenizer: { vocab: S.tok.vocabSize }, trainTokens: S.streams?.train.length ?? 0,
   };
 }
@@ -116,12 +117,13 @@ async function save() {
     version: 1, savedAt: Date.now(), dataset: S.dataset, uploadText: S.uploadText, preset: S.preset, cfg: S.cfg,
     tokenizer: { tokens: S.tok.tokens, merges: S.tok.merges }, params, m, v,
     step: S.step, total: S.total, maxLr: S.maxLr, history: S.history, evals: S.evals, samples: S.samples,
+    phaseStart: S.phaseStart, ft: S.ft,
   });
   post({ type: 'saved', step: S.step });
 }
 
-async function restore() {
-  const c = await loadCheckpoint(CHECKPOINT);
+async function restore(key = CHECKPOINT) {
+  const c = await loadCheckpoint(key);
   if (!c || c.version !== 1) return null;
   S.tok = makeTokenizer(c.tokenizer);
   const raw = await loadText(c.dataset, c.uploadText);
@@ -131,7 +133,7 @@ async function restore() {
   await setup({ preset: c.preset });
   S.model.setParams(c.params);
   S.model.setOptState(c.m, c.v);
-  Object.assign(S, { step: c.step, total: c.total, maxLr: c.maxLr, history: c.history, evals: c.evals, samples: c.samples, paramsCache: null });
+  Object.assign(S, { step: c.step, total: c.total, maxLr: c.maxLr, history: c.history, evals: c.evals, samples: c.samples, paramsCache: null, phaseStart: c.phaseStart ?? 0, ft: c.ft ?? null });
   return { ...describe(), tokens: S.tok.tokens, merges: S.tok.merges, docs: docs.length, chars: S.chars, trainTokens: S.streams.train.length, valTokens: S.streams.val.length };
 }
 
@@ -155,8 +157,8 @@ async function trainLoop() {
     while (S.running && S.step < S.total && performance.now() - chunkStart < 120) {
       const { inp, tgt } = sampleBatch(S.streams.train, B, cfg.ctx, S.rng);
       model.setBatch(inp, tgt);
-      const lr = learningRate(S.step, S.total, S.maxLr);
-      pending.push(model.queueStep({ lr, wd: 0.1, t: S.step + 1, maxNorm: 1 }));
+      const lr = learningRate(S.step - S.phaseStart, S.total - S.phaseStart, S.maxLr);
+      pending.push(model.queueStep({ lr, wd: 0.1, t: S.step - S.phaseStart + 1, maxNorm: 1 }));
       S.step += 1;
       stepsSince += 1;
       if (pending.length >= 2) await settle();
@@ -169,7 +171,7 @@ async function trainLoop() {
     const elapsed = (performance.now() - t0) / 1000;
     post({
       type: 'progress', step: S.step, total: S.total, losses: S.history.slice(S.history.length - stepsSince),
-      lr: learningRate(S.step, S.total, S.maxLr), stepsPerSec: stepsSince / elapsed, tokensPerSec: (stepsSince * B * cfg.ctx) / elapsed,
+      lr: learningRate(S.step - S.phaseStart, S.total - S.phaseStart, S.maxLr), stepsPerSec: stepsSince / elapsed, tokensPerSec: (stepsSince * B * cfg.ctx) / elapsed,
     });
     t0 = performance.now();
     stepsSince = 0;
@@ -288,6 +290,91 @@ async function matmulGflops(be) {
 }
 //#endregion
 
+// Für „Ins Modell schauen“: Tokens, Wahrscheinlichkeiten fürs nächste Token
+// und alle Attention-Gewichte für einen Text.
+async function inspect({ prompt }) {
+  const { cfg, tok } = S;
+  const params = await currentParams();
+  const inf = createInference(cfg, params);
+  const ids = [tok.eot, ...tok.encode(prompt)].slice(0, Math.min(cfg.ctx, 48));
+  const trace = { attn: Array.from({ length: cfg.nLayers }, () => Array.from({ length: cfg.nHeads }, () => [])) };
+  let logits;
+  ids.forEach((id, pos) => { logits = inf.step(id, pos, trace); });
+  const max = Math.max(...logits);
+  const exps = Array.from(logits, (l) => Math.exp(l - max));
+  const sum = exps.reduce((a, b) => a + b, 0);
+  return { ids, labels: ids.map((id) => tok.display(id)), probs: exps.map((e) => e / sum), attn: trace.attn };
+}
+
+//#region llama-embedding-map
+// Jedes Token ist ein Punkt in einem Raum mit dim Dimensionen (bei „Klein“: 256).
+// Eine Hauptkomponentenanalyse (PCA) sucht die zwei Richtungen, in denen sich die
+// Punkte am stärksten unterscheiden, und projiziert alles auf diese Ebene.
+async function embeddingMap({ limit = 500 }) {
+  const { cfg, tok } = S;
+  const params = await currentParams();
+  const d = cfg.dim;
+  const E = params.subarray(0, cfg.vocabSize * d);   // token_embd liegt ganz vorne
+  // Buchstaben, Ziffern, Satzzeichen und die zuerst (also häufigsten) gelernten Tokens
+  const ids = [];
+  for (let b = 33; b < 127; b++) ids.push(b);
+  for (let id = 256; id < Math.min(tok.eot, 256 + limit); id++) ids.push(id);
+  const mean = new Float64Array(d);
+  for (const id of ids) for (let j = 0; j < d; j++) mean[j] += E[id * d + j] / ids.length;
+  const X = ids.map((id) => Float64Array.from({ length: d }, (_, j) => E[id * d + j] - mean[j]));
+  const C = new Float64Array(d * d);                 // Kovarianzmatrix d×d
+  for (const x of X) for (let i = 0; i < d; i++) { const xi = x[i]; for (let j = 0; j < d; j++) C[i * d + j] += xi * x[j]; }
+  const rng = makeRng(1);
+  const power = (deflate) => {                       // Potenzmethode: größter Eigenvektor
+    let v = Float64Array.from({ length: d }, () => rng.random() - 0.5);
+    for (let it = 0; it < 200; it++) {
+      if (deflate) { const dot = v.reduce((s, x, i) => s + x * deflate[i], 0); v = v.map((x, i) => x - dot * deflate[i]); }
+      const w = new Float64Array(d);
+      for (let i = 0; i < d; i++) { let s2 = 0; for (let j = 0; j < d; j++) s2 += C[i * d + j] * v[j]; w[i] = s2; }
+      const norm = Math.hypot(...w) || 1;
+      v = w.map((x) => x / norm);
+    }
+    return v;
+  };
+  const v1 = power(null), v2 = power(v1);
+  const proj = (x, v) => x.reduce((s, xi, i) => s + xi * v[i], 0);
+  return { points: ids.map((id, k) => ({ id, label: tok.display(id), x: proj(X[k], v1), y: proj(X[k], v2), merged: id >= 256 })) };
+}
+//#endregion
+
+//#region llama-finetune
+// Fine-Tuning: dasselbe Modell mit neuen Texten weitertrainieren.
+//  - Der Tokenizer bleibt (sonst passen die gelernten Embeddings nicht mehr).
+//  - Adam beginnt von vorn, die Lernrate ist kleiner: Das Modell soll sich
+//    anpassen, aber nicht alles Gelernte über Bord werfen.
+async function finetunePrepare({ dataset, text, steps }) {
+  if (!S.model || S.step === 0) throw new Error('Trainiere zuerst ein Modell (Schritt 9).');
+  S.running = false;
+  if (!S.ft) {                                   // Basismodell nur beim ersten Mal sichern
+    await save();
+    await saveCheckpoint('basis', await loadCheckpoint(CHECKPOINT));
+  }
+  const raw = await loadText(dataset, text);
+  const docs = splitDocs(dataset, raw);
+  if (docs.length === 0) throw new Error('Der neue Text ist leer.');
+  const from = S.ft?.from ?? S.dataset;
+  Object.assign(S, { dataset, uploadText: dataset === 'upload' ? raw : '' });
+  S.streams = buildStreams(docs, S.tok);
+  const n = S.model.layout.total;
+  S.model.setOptState(new Float32Array(n), new Float32Array(n));
+  S.maxLr = PRESETS[S.preset].lr * 0.3;
+  S.phaseStart = S.step;
+  S.total = S.step + steps;
+  S.paramsCache = null;
+  await evaluate();                              // Vorher: Val-Loss und Beispiel auf dem neuen Text
+  const before = { ...S.evals.at(-1), sample: S.samples.at(-1) };
+  const chars = docs.reduce((sum, d) => sum + d.length, 0);
+  S.ft = { from, to: dataset, baseStep: S.step, before, charsPerToken: chars / (S.streams.train.length + S.streams.val.length) };
+  await save();
+  return describe();
+}
+//#endregion
+
 // Val-Loss mit bestimmten Gewichten (für den Vergleich F32 ↔ quantisiert).
 async function valLossWith(params) {
   const { cfg, model } = S;
@@ -329,6 +416,14 @@ onmessage = async (e) => {
       case 'tokenize': reply(await tokenize(msg)); break;
       case 'setup': S.total = msg.total ?? S.total; reply(await setup(msg)); break;
       case 'restore': reply({ state: await restore() }); break;
+      case 'finetune': reply(await finetunePrepare(msg)); break;
+      case 'revert': {
+        const st = await restore('basis');
+        if (!st) throw new Error('Kein gesichertes Basismodell gefunden.');
+        await save();
+        reply({ state: st });
+        break;
+      }
       case 'describe': reply({ state: S.model ? describe() : null }); break;
       case 'train':
         if (!S.model || S.running) break;
@@ -350,6 +445,8 @@ onmessage = async (e) => {
         break;
       }
       case 'export': { const r = await exportModel(msg); reply(r, [r.gguf.buffer]); break; }
+      case 'inspect': reply(await inspect(msg)); break;
+      case 'embeddings': reply(await embeddingMap(msg)); break;
       case 'benchmark':
         if (S.running) throw new Error('Während des Trainings kann nicht gemessen werden. Pausiere zuerst.');
         reply(await benchmark(msg));

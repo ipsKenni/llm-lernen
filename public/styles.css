@@ -426,6 +426,11 @@ output { font-family: var(--font-mono); color: var(--ink); min-width: 2.5em; }
 .rope-demo .slider { grid-template-columns: 1.5em minmax(0, 1fr) 2.5em; }
 .rope-demo .hint { margin: 0 0 12px; }
 
+.swatch-muted { background: var(--muted); }
+.scatter { width: 100%; display: block; touch-action: none; }
+.att-grid-wide { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.ft-sample { font-family: var(--font-sans); white-space: pre-wrap; min-width: 16em; }
+.ft-sample b { font-weight: 700; }
 .swatch-val { width: 18px; height: 0; border-top: 2px dashed var(--ink); border-radius: 0; background: none; }
 .sample-log-wide li { grid-template-columns: 7em minmax(0, 1fr); }
 .sample-log-wide .what { font-family: var(--font-sans); white-space: pre-wrap; }

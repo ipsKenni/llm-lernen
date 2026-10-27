@@ -311,7 +311,7 @@ function niceStep(raw) {
 // ---------------------------------------------------------------------
 // Wahrscheinlichkeitsbalken: die Top-k Kandidaten fürs nächste Token.
 // ---------------------------------------------------------------------
-export function renderProbBars(container, probs, itos, { topK = 8, highlight = -1 } = {}) {
+export function renderProbBars(container, probs, itos, { topK = 8, highlight = -1, endId = 0, endLabel = '.', endTitle = 'Ende des Namens' } = {}) {
   const order = probs.map((p, i) => [p, i]).sort((a, b) => b[0] - a[0]).slice(0, topK);
   if (highlight >= 0 && !order.some(([, i]) => i === highlight)) order[order.length - 1] = [probs[highlight], highlight];
   const max = order[0][0];
@@ -320,8 +320,8 @@ export function renderProbBars(container, probs, itos, { topK = 8, highlight = -
     row.className = 'pbar' + (i === highlight ? ' is-picked' : '');
     const label = document.createElement('span');
     label.className = 'tok';
-    label.textContent = i === 0 ? '.' : showChar(itos[i]);
-    if (i === 0) label.title = 'Ende des Namens';
+    label.textContent = i === endId ? endLabel : showChar(itos[i]);
+    if (i === endId) label.title = endTitle;
     const track = document.createElement('span');
     track.className = 'pbar-track';
     const fill = document.createElement('span');
@@ -352,4 +352,58 @@ export function renderTiles(container, chars, ids, { activeIndex = -1 } = {}) {
     t.append(ch, id);
     return t;
   }));
+}
+
+// ---------------------------------------------------------------------
+// Streudiagramm (für die Token-Karte). points: [{ x, y, label, merged }]
+// Die Achsen einer PCA haben keine Einheit – deshalb ohne Achsenbeschriftung.
+// ---------------------------------------------------------------------
+export function createScatter(canvas, { height = 420, labelIf = () => false } = {}) {
+  let points = [];
+  let placed = [];
+  let hover = -1;
+
+  function draw() {
+    const { ctx, w, h } = setupCanvas(canvas, () => height);
+    if (!points.length) return;
+    const pad = 28;
+    const xs = points.map((p) => p.x), ys = points.map((p) => p.y);
+    const [x0, x1] = [Math.min(...xs), Math.max(...xs)], [y0, y1] = [Math.min(...ys), Math.max(...ys)];
+    const X = (v) => pad + ((v - x0) / (x1 - x0 || 1)) * (w - 2 * pad);
+    const Y = (v) => h - pad - ((v - y0) / (y1 - y0 || 1)) * (h - 2 * pad);
+    placed = points.map((p) => [X(p.x), Y(p.y)]);
+    const fwd = cssVar('--fwd'), muted = cssVar('--muted'), ink = cssVar('--ink'), surface = cssVar('--surface');
+    ctx.font = `12px ${cssVar('--font-mono')}`;
+    ctx.textBaseline = 'middle';
+    points.forEach((p, i) => {
+      const [px, py] = placed[i];
+      ctx.fillStyle = p.merged ? fwd : muted;
+      ctx.beginPath(); ctx.arc(px, py, i === hover ? 6 : 3.5, 0, 2 * Math.PI); ctx.fill();
+    });
+    // Beschriftungen mit kleinem Hintergrund, damit sie lesbar bleiben
+    points.forEach((p, i) => {
+      if (!labelIf(p, i) && i !== hover) return;
+      const [px, py] = placed[i];
+      const tw = ctx.measureText(p.label).width;
+      ctx.fillStyle = surface;
+      ctx.globalAlpha = 0.8;
+      ctx.fillRect(px + 5, py - 7, tw + 4, 14);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = i === hover ? ink : p.merged ? ink : muted;
+      ctx.fillText(p.label, px + 7, py);
+    });
+  }
+
+  canvas.addEventListener('pointermove', (e) => {
+    const r = canvas.getBoundingClientRect();
+    const mx = e.clientX - r.left, my = e.clientY - r.top;
+    let best = -1, bestD = 14 * 14;
+    placed.forEach(([px, py], i) => { const dd = (px - mx) ** 2 + (py - my) ** 2; if (dd < bestD) { bestD = dd; best = i; } });
+    if (best !== hover) { hover = best; draw(); }
+    if (best >= 0) showTooltip(e, [[points[best].label], [points[best].merged ? 'gelerntes Token' : 'einzelnes Zeichen', `(ID ${points[best].id})`]]);
+    else hideTooltip();
+  });
+  canvas.addEventListener('pointerleave', () => { hover = -1; hideTooltip(); draw(); });
+  onResize(canvas, draw);
+  return { update(p) { points = p; hover = -1; draw(); } };
 }

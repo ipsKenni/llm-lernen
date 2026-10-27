@@ -19,6 +19,8 @@ import * as bpeStep from './steps/bpe-step.js';
 import * as bauplan from './steps/bauplan.js';
 import * as llamaTraining from './steps/llama-training.js';
 import * as ollamaExport from './steps/ollama-export.js';
+import * as hineinschauen from './steps/hineinschauen.js';
+import * as finetuning from './steps/finetuning.js';
 import { part2 } from './steps/teil2.js';
 
 const STEPS = [
@@ -32,6 +34,8 @@ const STEPS = [
   { title: 'Tokenizer', mod: bpeStep },
   { title: 'Bauplan', mod: bauplan },
   { title: 'Training', mod: llamaTraining },
+  { title: 'Hineinschauen', mod: hineinschauen },
+  { title: 'Fine-Tuning', mod: finetuning },
   { title: 'Ab nach Ollama', mod: ollamaExport },
   { title: 'Wie geht es weiter?', mod: null },
 ];

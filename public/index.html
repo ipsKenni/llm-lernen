@@ -72,8 +72,10 @@
         <li><a href="#7" data-nav="7"><span class="step-no">7</span><span>Tokenizer</span></a></li>
         <li><a href="#8" data-nav="8"><span class="step-no">8</span><span>Bauplan</span></a></li>
         <li><a href="#9" data-nav="9"><span class="step-no">9</span><span>Training</span></a></li>
-        <li><a href="#10" data-nav="10"><span class="step-no">10</span><span>Ab nach Ollama</span></a></li>
-        <li><a href="#11" data-nav="11"><span class="step-no">11</span><span>Wie geht es weiter?</span></a></li>
+        <li><a href="#10" data-nav="10"><span class="step-no">10</span><span>Hineinschauen</span></a></li>
+        <li><a href="#11" data-nav="11"><span class="step-no">11</span><span>Fine-Tuning</span></a></li>
+        <li><a href="#12" data-nav="12"><span class="step-no">12</span><span>Ab nach Ollama</span></a></li>
+        <li><a href="#13" data-nav="13"><span class="step-no">13</span><span>Wie geht es weiter?</span></a></li>
       </ol>
       <p class="nav-status" id="nav-status" aria-live="polite"></p>
     </nav>
@@ -576,7 +578,91 @@
 
       <!-- ============================================================ 10 -->
       <section class="step" data-step="10" aria-labelledby="h-10" hidden>
-        <h2 id="h-10">Testen und in Ollama benutzen</h2>
+        <h2 id="h-10">Ins Modell hineinschauen</h2>
+        <div class="notice" id="in-none">
+          <p>Hier gibt es erst etwas zu sehen, wenn ein Modell trainiert ist.</p>
+          <div class="toolbar"><a class="btn btn-primary" href="#9">Zu Schritt 9</a></div>
+        </div>
+        <div id="in-main" hidden>
+          <p>Ein LLM ist keine Blackbox: Jede Zahl lässt sich ansehen. Hier siehst du, was dein Modell bei einem Text erwartet, worauf seine Attention-Köpfe achten und wie es die Tokens im Raum anordnet.</p>
+          <div class="panel">
+            <label class="field-label" for="in-prompt">Text</label>
+            <textarea id="in-prompt" class="text-input" rows="2" spellcheck="false"></textarea>
+            <div class="tok-strip" id="in-tokens"></div>
+            <h3 class="panel-h">Was das Modell als Nächstes erwartet</h3>
+            <div class="pbars" id="in-bars"></div>
+            <h3 class="panel-h">Worauf die Attention-Köpfe schauen</h3>
+            <p class="hint">Zeile: das Token, das gerade rechnet. Spalte: das Token, auf das es schaut. Oft gibt es Köpfe, die fast nur auf das vorige Token schauen, und andere, die am Textanfang „parken“, wenn nichts Wichtiges da ist.</p>
+            <label class="inline-field">Schicht <select id="in-layer"></select></label>
+            <div class="att-grid att-grid-wide" id="in-attn"></div>
+          </div>
+
+          <h3>Eine Landkarte der Tokens</h3>
+          <p>Jedes Token ist für das Modell ein Punkt in einem Raum mit vielen Dimensionen (bei „Klein“ sind es 256). Eine Hauptkomponentenanalyse sucht die zwei Richtungen, in denen sich die Punkte am stärksten unterscheiden, und zeigt die Tokens auf dieser Ebene. Tokens, die das Modell ähnlich benutzt, liegen oft nah beieinander, zum Beispiel Satzzeichen, Großbuchstaben oder Wortendungen.</p>
+          <div class="panel">
+            <div class="toolbar"><button class="btn" id="in-map-run">Karte berechnen</button></div>
+            <canvas class="scatter" id="in-map" role="img" aria-label="Token-Embeddings, auf zwei Dimensionen projiziert"></canvas>
+            <div class="legend">
+              <span class="legend-item"><span class="swatch swatch-fwd"></span>gelerntes Token (BPE)</span>
+              <span class="legend-item"><span class="swatch swatch-muted"></span>einzelnes Zeichen</span>
+            </div>
+            <p class="hint" id="in-map-status">Die Karte zeigt den aktuellen Trainingsstand.</p>
+          </div>
+
+          <h3>Der Code</h3>
+          <div class="code" data-code="llama/trainer-worker.js#llama-embedding-map"></div>
+        </div>
+      </section>
+
+      <!-- ============================================================ 11 -->
+      <section class="step" data-step="11" aria-labelledby="h-11" hidden>
+        <h2 id="h-11">Fine-Tuning: ein Modell umerziehen</h2>
+        <p>Große Sprachmodelle werden nicht für jede Aufgabe neu trainiert. Man nimmt ein fertiges Modell und trainiert es mit neuen Texten weiter: Fine-Tuning. So entstehen aus einem allgemeinen Modell Chat-Assistenten oder Spezialisten für Code oder Medizin.</p>
+        <p>Drei Dinge sind dabei anders als beim ersten Training. Der <strong>Tokenizer bleibt</strong>, sonst passen die gelernten Embeddings nicht mehr. Fremde Texte funktionieren trotzdem, weil jedes Byte ein Token ist, sie werden nur in kleinere Stücke zerlegt. Die <strong>Lernrate ist kleiner</strong> (30 %), damit das Modell nicht alles vergisst. Und <strong>Adam startet neu</strong>, weil sein Gedächtnis zu den alten Daten gehört.</p>
+        <div class="notice" id="ft-none">
+          <p>Fine-Tuning braucht ein trainiertes Basismodell.</p>
+          <div class="toolbar"><a class="btn btn-primary" href="#9">Zu Schritt 9</a></div>
+        </div>
+        <div id="ft-main" hidden>
+          <div class="panel">
+            <p class="readout">Basismodell: trainiert auf <strong id="ft-from"></strong>. Womit soll es weiterlernen?</p>
+            <div class="choice-grid" id="ft-choices" role="radiogroup" aria-label="Neuer Datensatz"></div>
+            <div id="ft-upload">
+              <label class="field-label" for="ft-file">Textdatei auswählen (.txt, UTF-8)</label>
+              <input type="file" id="ft-file" accept=".txt,text/plain">
+              <p class="hint" id="ft-file-info">Zum Beispiel deine eigenen Geschichten, Gedichte oder Notizen.</p>
+            </div>
+            <div class="toolbar">
+              <label class="inline-field">Schritte
+                <select id="ft-steps"><option>100</option><option selected>300</option><option>1000</option></select>
+              </label>
+              <button class="btn btn-primary" id="ft-run">Fine-Tuning starten</button>
+              <button class="btn" id="ft-revert" hidden>Zum Basismodell zurück</button>
+            </div>
+            <p class="readout" id="ft-status" aria-live="polite"></p>
+            <div id="ft-result" hidden>
+              <p class="hint" id="ft-info"></p>
+              <canvas class="chart" id="ft-chart" role="img" aria-label="Loss-Verlauf beim Fine-Tuning"></canvas>
+              <div class="table-wrap">
+                <table class="data-table compare">
+                  <thead><tr><th scope="col"></th><th scope="col">Vorher</th><th scope="col">Nachher</th></tr></thead>
+                  <tbody>
+                    <tr><th scope="row">Val-Loss auf dem neuen Text</th><td id="ft-before-loss"></td><td id="ft-after-loss"></td></tr>
+                    <tr><th scope="row">Beispieltext</th><td id="ft-before-sample"></td><td id="ft-after-sample"></td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <p>Das gesicherte Basismodell bleibt in deinem Browser. Du kannst jederzeit dorthin zurück. Exportierst du in Schritt 12, landet das fine-getunte Modell in der GGUF-Datei.</p>
+          <h3>Der Code</h3>
+          <div class="code" data-code="llama/trainer-worker.js#llama-finetune"></div>
+        </div>
+      </section>
+
+      <!-- ============================================================ 12 -->
+      <section class="step" data-step="12" aria-labelledby="h-12" hidden>
+        <h2 id="h-12">Testen und in Ollama benutzen</h2>
         <div class="notice" id="ex-none">
           <p>Hier gibt es noch nichts zu testen. Trainiere zuerst ein Modell in Schritt 9. Ein paar hundert Schritte reichen für einen ersten Eindruck.</p>
           <div class="toolbar"><a class="btn btn-primary" href="#9">Zu Schritt 9</a></div>
@@ -644,9 +730,9 @@
         </div>
       </section>
 
-      <!-- ============================================================ 11 -->
-      <section class="step" data-step="11" aria-labelledby="h-11" hidden>
-        <h2 id="h-11">Vom Spielzeug zum echten LLM</h2>
+      <!-- ============================================================ 13 -->
+      <section class="step" data-step="13" aria-labelledby="h-13" hidden>
+        <h2 id="h-13">Vom Spielzeug zum echten LLM</h2>
         <p>Du hast jedes Teil eines GPT gesehen, ein Llama-Modell selbst trainiert und in Ollama zum Laufen gebracht. Ein großes Modell wie GPT-4 oder Claude unterscheidet sich vor allem in der Größe, kaum im Prinzip.</p>
         <div class="table-wrap">
           <table class="data-table compare">

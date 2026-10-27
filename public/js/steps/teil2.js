@@ -12,7 +12,7 @@ export function part2() {
   const state = {
     dataset: 'maerchen', vocab: DATASETS.maerchen.vocab, preset: DATASETS.maerchen.preset, total: 2000,
     tokInfo: null, tokenizer: null, gpu: undefined,
-    setup: null, running: false, step: 0, losses: [], evals: [], samples: [],
+    setup: null, running: false, step: 0, losses: [], evals: [], samples: [], ft: null,
     stepsPerSec: 0, tokensPerSec: 0, lr: 0, savedStep: 0, error: '',
   };
   const emit = (what) => listeners.forEach((fn) => fn(what, state));
@@ -41,7 +41,7 @@ export function part2() {
 
   function applySetup(s) {
     Object.assign(state, {
-      setup: s, preset: s.preset, step: s.step, total: s.total, dataset: s.dataset,
+      setup: s, preset: s.preset, step: s.step, total: s.total, dataset: s.dataset, ft: s.ft ?? null,
       losses: s.history.slice(), evals: s.evals.slice(), samples: s.samples.slice(),
     });
   }
@@ -88,6 +88,19 @@ export function part2() {
       return s;
     },
     train(total) { state.error = ''; trainer.train(total); },
+    async finetune(dataset, steps, text) {
+      state.error = '';
+      const s = await trainer.finetune(dataset, steps, text);
+      applySetup(s);
+      emit('finetune');
+      return s;
+    },
+    async revert() {
+      const { state: s } = await trainer.revert();
+      applyTokenizer(s);
+      applySetup(s);
+      emit('restored');
+    },
     pause() { trainer.pause(); },
   };
   return store;

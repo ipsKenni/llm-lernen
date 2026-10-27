@@ -56,7 +56,8 @@ export function createInference(cfg, params) {
 
   //#region infer-step
   // Ein Token an Position pos verarbeiten → Logits fürs nächste Token.
-  function step(token, pos) {
+  // trace (optional) sammelt die Attention-Gewichte: trace.attn[Schicht][Kopf][pos].
+  function step(token, pos, trace = null) {
     x.set(E.subarray(token * d, token * d + d));
     for (let l = 0; l < L; l++) {
       const p = w[l];
@@ -78,6 +79,7 @@ export function createInference(cfg, params) {
         }
         let sum = 0;
         for (let t = 0; t <= pos; t++) { att[t] = Math.exp(att[t] - max); sum += att[t]; }
+        if (trace) trace.attn[l][h][pos] = Array.from({ length: pos + 1 }, (_, t) => att[t] / sum);
         for (let i = 0; i < hd; i++) {
           let acc = 0;
           for (let t = 0; t <= pos; t++) acc += att[t] * vc[t * kd + kh * hd + i];

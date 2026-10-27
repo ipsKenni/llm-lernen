@@ -1,4 +1,4 @@
-// Schritt 10 – Modell ausprobieren, als GGUF exportieren, in Ollama starten.
+// Schritt 12 – Modell ausprobieren, als GGUF exportieren, in Ollama starten.
 import { DATASETS } from '../llama/data.js';
 import { makeModelfile, FORMATS } from '../llama/gguf.js';
 import { tensorLayout } from '../llama/config.js';
