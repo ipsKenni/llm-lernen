@@ -44,7 +44,7 @@ export function createTrainerClient() {
     train: (total) => worker.postMessage({ type: 'train', total }),
     pause: () => worker.postMessage({ type: 'pause' }),
     generate: (opts, onToken) => request({ type: 'generate', ...opts }, onToken),
-    exportModel: (name) => request({ type: 'export', name }),
+    exportModel: (name, format = 'f32') => request({ type: 'export', name, format }),
     reset: () => request({ type: 'reset' }),
     benchmark: (presets, prefer, vocab) => request({ type: 'benchmark', presets, prefer, vocab }),
     on: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },

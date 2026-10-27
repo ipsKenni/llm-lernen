@@ -9,7 +9,7 @@ import { createWebGpuBackend, ENGINE_VERSION } from './backend-webgpu.js';
 import { createLlama } from './model.js';
 import { DATASETS, splitDocs, buildStreams, sampleBatch, learningRate } from './data.js';
 import { generate } from './infer.js';
-import { writeGGUF, readGGUF, makeModelfile } from './gguf.js';
+import { writeGGUF, readGGUF, makeModelfile, roundTripParams } from './gguf.js';
 import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from './checkpoint.js';
 import { makeRng } from '../rng.js';
 
@@ -288,14 +288,37 @@ async function matmulGflops(be) {
 }
 //#endregion
 
-async function exportModel({ name }) {
+// Val-Loss mit bestimmten Gewichten (für den Vergleich F32 ↔ quantisiert).
+async function valLossWith(params) {
+  const { cfg, model } = S;
+  model.setParams(params);
+  const rng = makeRng(99);
+  let sum = 0;
+  for (let i = 0; i < 4; i++) {
+    const { inp, tgt } = sampleBatch(S.streams.val, model.batch, cfg.ctx, rng);
+    model.setBatch(inp, tgt);
+    sum += await model.loss();
+  }
+  return sum / 4;
+}
+
+async function exportModel({ name, format = 'f32' }) {
   const params = await currentParams();
-  const bytes = writeGGUF(S.cfg, params, S.tok, name);
+  const bytes = writeGGUF(S.cfg, params, S.tok, name, format);
   const info = readGGUF(bytes);
+  // Referenz mit genau den Gewichten, die in der Datei stehen
+  const stored = format === 'f32' ? params : roundTripParams(S.cfg, params, format);
   const prompt = DATASETS[S.dataset].prompt || S.tok.decode(S.streams.train.slice(1, 4));
-  const greedy = S.tok.decode(generate(S.cfg, params, S.tok, prompt, { maxTokens: 40, temperature: 0 }));
+  const greedy = S.tok.decode(generate(S.cfg, stored, S.tok, prompt, { maxTokens: 40, temperature: 0 }));
+  let quality = null;
+  if (format !== 'f32' && !S.running) {
+    const f32 = await valLossWith(params);
+    const quant = await valLossWith(stored);
+    S.model.setParams(params);
+    quality = { f32, quant };
+  }
   const meta = Object.entries(info.meta).map(([k, v]) => [k, Array.isArray(v) ? `${v.length} Einträge` : String(v)]);
-  return { gguf: bytes, modelfile: makeModelfile(`${name}.gguf`, S.cfg), meta, tensors: info.tensors.length, prompt, greedy };
+  return { gguf: bytes, modelfile: makeModelfile(`${name}.gguf`, S.cfg), meta, tensors: info.tensors.length, prompt, greedy, format, quality };
 }
 
 onmessage = async (e) => {

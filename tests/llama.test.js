@@ -137,3 +137,42 @@ test('GGUF: Datei lässt sich wieder einlesen, Metadaten und Tensoren stimmen', 
     assert.deepEqual(data, params.subarray(src.offset, src.offset + src.size), t.name);
   }
 });
+
+test('F16: bekannte Werte, Rundung, Roundtrip', async () => {
+  const { toHalf, fromHalf } = await import('../public/js/llama/gguf.js');
+  const known = [[1, 0x3c00], [-2, 0xc000], [65504, 0x7bff], [0.1, 0x2e66], [1 / 3, 0x3555], [2 ** -24, 0x0001], [0, 0], [1e6, 0x7c00]];
+  for (const [x, h] of known) assert.equal(toHalf(x), h, `toHalf(${x})`);
+  for (let h = 0; h < 0x7c00; h += 37) assert.equal(toHalf(fromHalf(h)), h);   // alle Stichproben exakt darstellbar
+  assert.equal(toHalf(1 + 2 ** -11), 0x3c00);          // genau in der Mitte → zur geraden Zahl
+  assert.equal(toHalf(1 + 3 * 2 ** -11), 0x3c02);
+});
+
+test('Q8_0: Fehler etwa ein halber Schritt, Writer-Größen stimmen', async () => {
+  const { encodeTensor, decodeTensor, writeGGUF, readGGUF, roundTripParams } = await import('../public/js/llama/gguf.js');
+  const rng = makeRng(4);
+  const x = Float32Array.from({ length: 32 * 50 }, () => rng.gauss(0.05));
+  const bytes = encodeTensor(x, 'q8_0');
+  assert.equal(bytes.length, 50 * 34);
+  const y = decodeTensor(bytes, x.length, 'q8_0');
+  for (let b = 0; b < 50; b++) {
+    let amax = 0;
+    for (let j = 0; j < 32; j++) amax = Math.max(amax, Math.abs(x[b * 32 + j]));
+    // ½ Schritt Rundung plus der f16-Rundung des Faktors d selbst (127 · 2⁻¹¹ ≈ 0,06 Schritte)
+    for (let j = 0; j < 32; j++) assert.ok(Math.abs(x[b * 32 + j] - y[b * 32 + j]) <= (amax / 127) * 0.57 + 1e-7);
+  }
+  const tok = trainBPE(['anna', 'otto', 'emma'], 260);
+  const cfg = { vocabSize: tok.vocabSize, dim: 32, nLayers: 1, nHeads: 1, nKvHeads: 1, headDim: 32, ffnDim: 64, ctx: 8, ropeBase: 10000, normEps: 1e-5 };
+  const params = createLlama(cfg, createCpuBackend(), { batch: 1 }).initialParams(1);
+  const f32 = writeGGUF(cfg, params, tok, 't', 'f32').length;
+  const f16 = writeGGUF(cfg, params, tok, 't', 'f16');
+  const q8 = writeGGUF(cfg, params, tok, 't', 'q8_0');
+  assert.ok(f16.length < f32 && q8.length < f16.length);
+  const g = readGGUF(q8);
+  assert.equal(g.meta['general.file_type'], 7);
+  assert.equal(g.tensors.find((t) => t.name === 'blk.0.attn_norm.weight').type, 0);   // Normen bleiben F32
+  assert.equal(g.tensors.find((t) => t.name === 'blk.0.ffn_up.weight').type, 8);
+  const rt = roundTripParams(cfg, params, 'q8_0');
+  let worst = 0;
+  for (let i = 0; i < params.length; i++) worst = Math.max(worst, Math.abs(rt[i] - params[i]));
+  console.log(`  Dateigrößen: F32 ${f32} B, F16 ${f16.length} B, Q8_0 ${q8.length} B; größter Rundungsfehler ${worst.toExponential(2)}`);
+});

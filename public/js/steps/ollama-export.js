@@ -1,6 +1,7 @@
 // Schritt 10 – Modell ausprobieren, als GGUF exportieren, in Ollama starten.
 import { DATASETS } from '../llama/data.js';
-import { makeModelfile } from '../llama/gguf.js';
+import { makeModelfile, FORMATS } from '../llama/gguf.js';
+import { tensorLayout } from '../llama/config.js';
 import { fmt } from '../viz.js';
 import { part2 } from './teil2.js';
 
@@ -84,13 +85,39 @@ export function init(root) {
     }
   });
 
+  // --- Format ------------------------------------------------------------
+  let format = 'q8_0';
+  const formatBox = $('#ex-format');
+  // Dateigröße je Format, berechnet wie im Writer: Matrizen im Format, Normen in F32.
+  const sizeFor = (f) => {
+    const { tensors } = tensorLayout(S.setup.cfg);
+    return tensors.reduce((sum, t) => sum + (t.shape.length === 1 ? t.size * 4 : FORMATS[f].bytes(t.size)), 0);
+  };
+  const formatButtons = Object.entries(FORMATS).map(([key, f]) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.setAttribute('role', 'radio');
+    b.addEventListener('click', () => { format = key; renderFormats(); renderCommands(); });
+    formatBox.append(b);
+    return [key, b];
+  });
+  function renderFormats() {
+    if (!S.setup) return;
+    for (const [k, b] of formatButtons) {
+      b.setAttribute('aria-checked', String(k === format));
+      b.textContent = `${FORMATS[k].label} (${fmt(sizeFor(k) / 2 ** 20, 1)} MB)`;
+    }
+    $('#ex-format-info').textContent = `${FORMATS[format].label}: ${FORMATS[format].note}.${format === 'q8_0' ? ' So machen es auch die meisten Modelle, die du mit ollama pull holst (meist sogar mit 4 Bit).' : ''}`;
+  }
+
   // --- Export ------------------------------------------------------------
   const name = () => sanitize(nameInput.value);
+  const fileName = () => (format === 'f32' ? `${name()}.gguf` : `${name()}-${format}.gguf`);
   async function ensureExport() {
-    if (exported && exported.name === name() && exported.step === S.step) return exported;
+    if (exported && exported.name === name() && exported.step === S.step && exported.format === format) return exported;
     status.textContent = 'Erzeuge die GGUF-Datei …';
-    const r = await p2.trainer.exportModel(name());
-    exported = { name: name(), step: S.step, ...r };
+    const r = await p2.trainer.exportModel(name(), format);
+    exported = { name: name(), step: S.step, file: fileName(), ...r };
     const rows = r.meta.map(([k, v]) => {
       const tr = document.createElement('tr');
       const th = document.createElement('th');
@@ -111,16 +138,19 @@ export function init(root) {
   $('#ex-gguf').addEventListener('click', async () => {
     try {
       const r = await ensureExport();
-      download(r.gguf, `${r.name}.gguf`, 'application/octet-stream');
-      status.textContent = `${r.name}.gguf heruntergeladen: ${fmt(r.gguf.byteLength / 2 ** 20, 1)} MB, ${r.tensors} Tensoren, Stand nach ${S.step} Trainingsschritten. Lade auch das Modelfile herunter.`;
+      download(r.gguf, r.file, 'application/octet-stream');
+      const q = r.quality
+        ? ` Val-Loss: F32 ${fmt(r.quality.f32)}, ${FORMATS[r.format].label} ${fmt(r.quality.quant)} (Unterschied ${fmt(r.quality.quant - r.quality.f32, 4)}).`
+        : r.format !== 'f32' && S.running ? ' Für den Qualitätsvergleich mit F32 pausiere das Training und lade erneut herunter.' : '';
+      status.textContent = `${r.file} heruntergeladen: ${fmt(r.gguf.byteLength / 2 ** 20, 1)} MB, ${r.tensors} Tensoren, Stand nach ${S.step} Trainingsschritten.${q} Lade auch das Modelfile herunter.`;
     } catch (e) {
       status.textContent = `Export fehlgeschlagen: ${e.message}`;
     }
   });
   $('#ex-modelfile').addEventListener('click', () => {
     if (!S.setup) return;
-    download(makeModelfile(`${name()}.gguf`, S.setup.cfg), `${name()}.Modelfile`, 'text/plain');
-    status.textContent = `${name()}.Modelfile heruntergeladen. Lege es in denselben Ordner wie ${name()}.gguf.`;
+    download(makeModelfile(fileName(), S.setup.cfg), `${name()}.Modelfile`, 'text/plain');
+    status.textContent = `${name()}.Modelfile heruntergeladen. Es verweist auf ${fileName()}; lege beide in denselben Ordner.`;
   });
   nameInput.addEventListener('input', () => renderCommands());
   nameInput.addEventListener('change', () => { nameInput.value = name(); renderCommands(); });
@@ -147,6 +177,9 @@ export function init(root) {
       `ollama run ${n} ${quote(p)}`,
     ]);
     const refPrompt = exported?.prompt ?? DATASETS[S.dataset]?.prompt ?? p;
+    $('#ex-ref-note').textContent = format === 'f32'
+      ? 'Mit F32 muss der Text exakt übereinstimmen.'
+      : `Mit ${FORMATS[format].label} rechnet Ollama mit gerundeten Zahlen und rundet zusätzlich die Zwischenergebnisse. Nach einigen Wörtern kann der Text deshalb leicht abweichen. Für den exakten Vergleich exportiere als F32.`;
     commandBlock($('#ex-check-cmds'), [
       `ollama run ${n}`,
       '/set parameter temperature 0',
@@ -160,6 +193,7 @@ export function init(root) {
     $('#ex-none').hidden = ready;
     $('#ex-main').hidden = !ready;
     if (!ready) return;
+    renderFormats();
     if (lastDataset !== S.dataset) {
       lastDataset = S.dataset;
       prompt.value = DATASETS[S.dataset].prompt;

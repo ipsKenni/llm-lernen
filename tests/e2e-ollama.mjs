@@ -40,8 +40,12 @@ async function trainAndExport({ name, docs, vocab, cfg, batch, steps, lr, prompt
     loss = await model.trainStep({ lr: lr * warm * (0.1 + 0.9 * 0.5 * (1 + Math.cos(Math.PI * s / steps))), wd: 0.1, t: s });
   }
   const params = await model.readParams();
-  writeFileSync(join(out, `${name}.gguf`), writeGGUF(fullCfg, params, tok, name));
-  writeFileSync(join(out, `${name}.Modelfile`), makeModelfile(`${name}.gguf`, fullCfg));
+  for (const format of ['f32', 'f16', 'q8_0']) {
+    const file = format === 'f32' ? `${name}.gguf` : `${name}-${format}.gguf`;
+    const label = format === 'f32' ? name : `${name}-${format}`;
+    writeFileSync(join(out, file), writeGGUF(fullCfg, params, tok, label, format));
+    writeFileSync(join(out, `${label}.Modelfile`), makeModelfile(file, fullCfg));
+  }
   const expected = prompts.map((prompt) => {
     const ids = generate(fullCfg, params, tok, prompt, { maxTokens: 40, temperature: 0 });
     return { prompt, promptIds: [tok.eot, ...tok.encode(prompt)], ids, text: tok.decode(ids) };
@@ -53,16 +57,18 @@ async function trainAndExport({ name, docs, vocab, cfg, batch, steps, lr, prompt
 
 const names = data('names.txt').split('\n').filter(Boolean);
 const maerchen = data('maerchen.txt').split('\n<|endoftext|>\n');
-const results = [
+const only = process.argv[3];
+const results = [];
+if (only !== 'maerchen') results.push(
   await trainAndExport({
     name: 'namen', docs: names, vocab: 320, batch: 8, steps: 300, lr: 3e-3,
     cfg: { dim: 64, nLayers: 2, nHeads: 1, nKvHeads: 1, ffnDim: 128, ctx: 32 },
     prompts: ['', 'ma', 'jo', 'Kr'],
-  }),
+  }));
+results.push(
   await trainAndExport({
-    name: 'maerchen', docs: maerchen, vocab: 512, batch: 4, steps: 200, lr: 2e-3,
+    name: 'maerchen', docs: maerchen, vocab: 512, batch: 4, steps: Number(process.env.STEPS ?? 200), lr: 2e-3,
     cfg: { dim: 128, nLayers: 2, nHeads: 2, nKvHeads: 1, ffnDim: 384, ctx: 64 },
     prompts: ['Es war einmal', 'Der König sprach: »', 'Hänsel und Gretel'],
-  }),
-];
+  }));
 writeFileSync(join(out, 'expected.json'), JSON.stringify(results, null, 1));

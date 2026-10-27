@@ -602,6 +602,9 @@
             <label class="field-label" for="ex-name">Name deines Modells in Ollama</label>
             <input id="ex-name" class="text-input" type="text" autocomplete="off" spellcheck="false" maxlength="40">
             <p class="hint">Kleinbuchstaben, Ziffern und Bindestriche.</p>
+            <p class="field-label" id="ex-format-h">Speicherformat</p>
+            <div class="seg" id="ex-format" role="radiogroup" aria-labelledby="ex-format-h"></div>
+            <p class="hint" id="ex-format-info"></p>
             <div class="toolbar">
               <button class="btn btn-primary" id="ex-gguf">GGUF-Datei herunterladen</button>
               <button class="btn" id="ex-modelfile">Modelfile herunterladen</button>
@@ -628,11 +631,13 @@
           <p>Mit Temperatur 0 gibt es keinen Zufall mehr. Dann muss Ollama Wort für Wort dasselbe schreiben wie diese Seite. Starte dafür <code>ollama run</code> ohne Text und tippe nacheinander:</p>
           <div class="cmd" id="ex-check-cmds"></div>
           <p>Erwartete Ausgabe: <q class="ref-output" id="ex-ref">…</q></p>
+          <p class="hint" id="ex-ref-note"></p>
           <p class="hint">Willst du einen weiteren Anfang testen, tippe vorher <code>/clear</code>. Sonst schreibt Ollama den bisherigen Verlauf mit in den Kontext. Bei einem noch wenig trainierten Modell wiederholt sich der Text bei Temperatur 0 oft. Kommt dasselbe Token rund 30-mal hintereinander, bricht Ollama absichtlich ab, als Schutz vor Endlosschleifen. Bis dahin muss der Text identisch sein.</p>
 
           <h3>Der Code</h3>
           <div class="code" data-code="llama/gguf.js#gguf-metadata"></div>
           <div class="code" data-code="llama/gguf.js#gguf-write"></div>
+          <div class="code" data-code="llama/gguf.js#gguf-quant"></div>
           <div class="code" data-code="llama/gguf.js#gguf-modelfile"></div>
           <div class="code" data-code="llama/infer.js#infer-step"></div>
           <div class="code" data-code="llama/infer.js#infer-sample"></div>
