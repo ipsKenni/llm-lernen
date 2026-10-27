@@ -63,6 +63,9 @@ node tests/e2e-gguf-compare.mjs <datei.gguf> <modell> <ollama-url> "Es war einma
 ```
 
 Der Ollama-Vergleich erwartet bei Temperatur 0 tokengenau dieselbe Ausgabe wie die eigene Inferenz.
+Für ein Windows-Ollama aus WSL heraus `CURL_EXE=/mnt/c/Windows/System32/curl.exe`, `REQ_FILE_WSL` und
+`REQ_FILE_WIN` (dieselbe Datei als WSL- und Windows-Pfad) setzen; dann gehen die Anfragen über curl.exe.
+Geprüft mit Ollama 0.40.11 und 0.32.15 (Docker, CPU) sowie 0.32.15 unter Windows auf einer RTX 4070 SUPER (CUDA).
 Ollama bricht ab, wenn rund 30-mal hintereinander dasselbe Token kommt. Das Skript wertet das als
 „gleich bis Abbruch“.
 
