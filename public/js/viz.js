@@ -188,6 +188,36 @@ export function createHeatmap(canvas, { rowLabels, colLabels = rowLabels, descri
 // ---------------------------------------------------------------------
 export function createLineChart(canvas, { references = [], xLabel = 'Schritt', height = 260 }) {
   let series = [];
+  // Tabellen-Alternative: <details class="chart-table"> direkt nach dem Canvas
+  const tableBox = canvas.parentElement?.querySelector(`details.chart-table[data-for="${canvas.id}"]`);
+  const renderTable = () => {
+    if (!tableBox?.open) return;
+    const body = series.filter((s) => (s.values || s.points || []).length);
+    const n = Math.max(0, ...body.map((s) => (s.values ? s.values.length : s.points.at(-1)[0])));
+    const every = Math.max(1, Math.ceil(n / 30));
+    const head = document.createElement('tr');
+    for (const t of [xLabel, ...body.map((s) => s.name)]) { const th = document.createElement('th'); th.scope = 'col'; th.textContent = t; head.append(th); }
+    const rows = [];
+    for (let x = every; x <= n; x += every) {
+      const tr = document.createElement('tr');
+      const cells = [int(x), ...body.map((s) => {
+        if (s.values) return s.values[x - 1] !== undefined ? fmt(s.values[x - 1]) : '–';
+        const p = s.points.filter(([px]) => px <= x).at(-1);
+        return p ? fmt(p[1]) : '–';
+      })];
+      for (const c of cells) { const td = document.createElement('td'); td.textContent = c; tr.append(td); }
+      rows.push(tr);
+    }
+    const table = document.createElement('table');
+    table.className = 'data-table';
+    const thead = document.createElement('thead');
+    thead.append(head);
+    const tbody = document.createElement('tbody');
+    tbody.append(...rows);
+    table.append(thead, tbody);
+    tableBox.querySelector('.table-wrap').replaceChildren(rows.length ? table : document.createTextNode('Noch keine Werte.'));
+  };
+  tableBox?.addEventListener('toggle', renderTable);
   let xMax = 1;
   let hoverX = null;
   let geom = null;
@@ -297,7 +327,7 @@ export function createLineChart(canvas, { references = [], xLabel = 'Schritt', h
   onResize(canvas, draw);
 
   return {
-    update(newSeries, newXMax) { series = newSeries; xMax = newXMax; draw(); },
+    update(newSeries, newXMax) { series = newSeries; xMax = newXMax; draw(); renderTable(); },
     setReferences(refs) { references = refs; draw(); },
   };
 }

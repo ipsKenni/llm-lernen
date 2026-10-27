@@ -443,6 +443,9 @@ output { font-family: var(--font-mono); color: var(--ink); min-width: 2.5em; }
 .gen-output:empty::before { content: 'Hier erscheint der Text deines Modells.'; color: var(--muted); }
 .gen-prompt { font-weight: 700; }
 
+.chart-table { margin: 6px 0 10px; font-size: 0.9rem; }
+.chart-table summary { cursor: pointer; color: var(--muted); }
+.chart-table .table-wrap { max-height: 320px; overflow-y: auto; }
 .meta-details { margin-top: 12px; }
 .meta-details summary { cursor: pointer; font-weight: 700; }
 .meta-details th { font-family: var(--font-mono); font-weight: 400; font-size: 0.85rem; }
@@ -491,3 +494,8 @@ output { font-family: var(--font-mono); color: var(--ink); min-width: 2.5em; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------------------------------------------------------- Impressum / Datenschutz */
+.legal { max-width: 72ch; margin: 0 auto; padding: 40px 16px 64px; }
+.legal h1 { font-size: 2rem; margin: 16px 0 24px; }
+.legal h2 { font-size: 1.15rem; margin: 28px 0 8px; }

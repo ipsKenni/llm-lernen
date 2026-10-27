@@ -8,6 +8,7 @@ import { DEFAULT_CONFIG } from './transformer.js';
 import { renderTiles, fmt, int } from './viz.js';
 import { renderAllCode } from './code-view.js';
 import { createGptClient } from './worker-client.js';
+import { enhanceRadioGroups } from './a11y.js';
 import * as idee from './steps/idee.js';
 import * as zaehlen from './steps/zaehlen.js';
 import * as ableiten from './steps/ableiten.js';
@@ -156,6 +157,7 @@ async function boot() {
     const n = Number(location.hash.slice(1));
     return Number.isInteger(n) && n >= 0 && n < STEPS.length ? n : 0;
   };
+  enhanceRadioGroups(document);
   addEventListener('hashchange', () => show(fromHash()));
   show(fromHash());
   window.llmBooted = true;

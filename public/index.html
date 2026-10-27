@@ -214,6 +214,7 @@
             <div><dt>Zähl-Modell</dt><dd id="nb-target">–</dd></div>
           </dl>
           <canvas class="chart" id="nb-chart" role="img" aria-label="Loss-Verlauf des neuronalen Bigram-Modells"></canvas>
+          <details class="chart-table" data-for="nb-chart"><summary>Als Tabelle anzeigen</summary><div class="table-wrap"></div></details>
           <div class="panel-split">
             <div>
               <h3 class="panel-h">Gelernt: softmax(W)</h3>
@@ -326,6 +327,7 @@
             <div><dt>Schritte pro Sekunde</dt><dd id="gpt-speed">–</dd></div>
           </dl>
           <canvas class="chart" id="gpt-chart" role="img" aria-label="Loss-Verlauf des GPT-Trainings"></canvas>
+          <details class="chart-table" data-for="gpt-chart"><summary>Als Tabelle anzeigen</summary><div class="table-wrap"></div></details>
           <div class="legend">
             <span class="legend-item"><span class="swatch swatch-line swatch-faint"></span>Loss pro Schritt</span>
             <span class="legend-item"><span class="swatch swatch-line"></span>gleitender Mittelwert (50 Schritte)</span>
@@ -553,6 +555,7 @@
             <div><dt>Restzeit</dt><dd id="tr-eta">–</dd></div>
           </dl>
           <canvas class="chart" id="tr-chart" role="img" aria-label="Verlauf von Trainings- und Validierungs-Loss"></canvas>
+          <details class="chart-table" data-for="tr-chart"><summary>Als Tabelle anzeigen</summary><div class="table-wrap"></div></details>
           <div class="legend">
             <span class="legend-item"><span class="swatch swatch-line swatch-faint"></span>Train-Loss pro Schritt</span>
             <span class="legend-item"><span class="swatch swatch-line"></span>Train-Loss, geglättet</span>
@@ -643,6 +646,7 @@
             <div id="ft-result" hidden>
               <p class="hint" id="ft-info"></p>
               <canvas class="chart" id="ft-chart" role="img" aria-label="Loss-Verlauf beim Fine-Tuning"></canvas>
+          <details class="chart-table" data-for="ft-chart"><summary>Als Tabelle anzeigen</summary><div class="table-wrap"></div></details>
               <div class="table-wrap">
                 <table class="data-table compare">
                   <thead><tr><th scope="col"></th><th scope="col">Vorher</th><th scope="col">Nachher</th></tr></thead>
