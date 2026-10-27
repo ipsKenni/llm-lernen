@@ -489,6 +489,22 @@
         <div class="choice-grid" id="preset-choices" role="radiogroup" aria-labelledby="preset-h"></div>
         <p class="hint" id="preset-info"></p>
 
+        <h3>Wie schnell ist dein Rechner?</h3>
+        <p>Die Messung trainiert jede Größe ein paar Schritte lang mit Zufallsdaten und stoppt die Zeit. Das dauert je nach Rechner 10 Sekunden bis 2 Minuten. Danach stehen auf den Karten oben echte statt geschätzte Zeiten.</p>
+        <div class="panel">
+          <div class="toolbar">
+            <button class="btn" id="bench-run">Geschwindigkeit messen</button>
+            <button class="btn btn-small" id="bench-copy" hidden>Ergebnis kopieren</button>
+          </div>
+          <p class="readout" id="bench-status" aria-live="polite"></p>
+          <div class="table-wrap" id="bench-wrap" hidden>
+            <table class="data-table">
+              <thead><tr><th scope="col">Größe</th><th scope="col">Parameter</th><th scope="col">Tokens pro Sekunde</th><th scope="col">Zeit pro Schritt</th><th scope="col">1.000 Schritte</th></tr></thead>
+              <tbody id="bench-body"></tbody>
+            </table>
+          </div>
+        </div>
+
         <h3>Der Code</h3>
         <div class="code" data-code="llama/config.js#llama-layout"></div>
         <div class="code" data-code="llama/model.js#llama-forward"></div>
@@ -496,6 +512,7 @@
         <div class="code" data-code="llama/backend-cpu.js#cpu-swiglu"></div>
         <div class="code" data-code="llama/backend-cpu.js#cpu-attention"></div>
         <div class="code" data-code="llama/backend-webgpu.js#webgpu-matmul"></div>
+        <div class="code" data-code="llama/trainer-worker.js#llama-benchmark"></div>
       </section>
 
       <!-- ============================================================ 9 -->
@@ -674,7 +691,7 @@
   </div>
 
   <footer class="site-footer">
-    <p>Datensätze: <code>names.txt</code> aus <a href="https://github.com/karpathy/makemore" target="_blank" rel="noopener">karpathy/makemore</a> (MIT-Lizenz); „Deutsche Märchen gesammelt durch die Brüder Grimm“ aus <a href="https://www.gutenberg.org/ebooks/77905" target="_blank" rel="noopener">Projekt Gutenberg</a> (gemeinfrei); ein Ausschnitt aus <a href="https://huggingface.co/datasets/roneneldan/TinyStories" target="_blank" rel="noopener">TinyStories</a> von Eldan und Li (<a href="https://cdla.dev/sharing-1-0/" target="_blank" rel="noopener">CDLA-Sharing-1.0</a>). Aufbau inspiriert von Andrej Karpathys micrograd, microgpt und llama2.c. Schrift: Atkinson Hyperlegible vom Braille Institute. Alles läuft lokal in deinem Browser, es werden keine Daten verschickt.</p>
+    <p>Datensätze: <code>names.txt</code> aus <a href="https://github.com/karpathy/makemore" target="_blank" rel="noopener">karpathy/makemore</a> (MIT-Lizenz); „Deutsche Märchen gesammelt durch die Brüder Grimm“ aus <a href="https://www.gutenberg.org/ebooks/77905" target="_blank" rel="noopener">Projekt Gutenberg</a> (gemeinfrei); ein Ausschnitt aus <a href="https://huggingface.co/datasets/roneneldan/TinyStories" target="_blank" rel="noopener">TinyStories</a> von Eldan und Li (<a href="https://cdla.dev/sharing-1-0/" target="_blank" rel="noopener">CDLA-Sharing-1.0</a>). Aufbau inspiriert von Andrej Karpathys micrograd, microgpt und llama2.c. Schrift: Atkinson Hyperlegible (<a href="fonts/OFL.txt">SIL Open Font License</a>). Übersicht aller Quellen: <a href="data/LIZENZEN.md">data/LIZENZEN.md</a>. Alles läuft lokal in deinem Browser, es werden keine Daten verschickt. Quelltext: <a href="https://github.com/ipsKenni/llm-lernen" target="_blank" rel="noopener">github.com/ipsKenni/llm-lernen</a>.</p>
   </footer>
 </body>
 </html>

@@ -5,7 +5,7 @@
 import { trainBPE, makeTokenizer } from './bpe.js';
 import { makeConfig, PRESETS, countParams } from './config.js';
 import { createCpuBackend } from './backend-cpu.js';
-import { createWebGpuBackend } from './backend-webgpu.js';
+import { createWebGpuBackend, ENGINE_VERSION } from './backend-webgpu.js';
 import { createLlama } from './model.js';
 import { DATASETS, splitDocs, buildStreams, sampleBatch, learningRate } from './data.js';
 import { generate } from './infer.js';
@@ -171,6 +171,86 @@ async function trainLoop() {
 }
 //#endregion
 
+//#region llama-benchmark
+// Misst echte Trainingsschritte mit Zufallsdaten. Jede Größe bekommt ihr eigenes
+// GPU-Device, das danach wieder freigegeben wird.
+// Zeitbudget: pro Größe höchstens ~10 s messen; ist ein Schritt schon länger als
+// 15 s, sind die größeren Modelle hier praktisch nicht trainierbar → überspringen.
+const BENCH_BUDGET_MS = 10000;
+const BENCH_GIVE_UP_MS = 15000;
+
+async function benchmark({ presets, prefer = 'auto', vocab = 2048 }) {
+  const results = [];
+  let adapter = null, kind = 'cpu', gflops = null, tooSlow = false;
+  for (const key of presets) {
+    const p = PRESETS[key];
+    const cfg = makeConfig(p, vocab);
+    const entry = { preset: key, params: countParams(cfg), batch: p.batch, ctx: p.ctx };
+    if (tooSlow) {
+      entry.error = 'übersprungen, schon die kleinere Größe war sehr langsam';
+      results.push(entry);
+      post({ type: 'benchmark', entry });
+      continue;
+    }
+    const be = (prefer === 'cpu' ? null : await createWebGpuBackend().catch(() => null)) || createCpuBackend();
+    kind = be.kind;
+    adapter = be.adapterInfo || null;
+    try {
+      if (gflops === null) gflops = await matmulGflops(be);
+      be.pushOomScope?.();
+      const model = createLlama(cfg, be, { batch: p.batch });
+      model.setParams(model.initialParams(1));
+      const err = await be.popOomScope?.();
+      if (err) throw new Error('nicht genug Grafikspeicher');
+      const rng = makeRng(5);
+      const fake = Int32Array.from({ length: 4096 }, () => rng.int(vocab));
+      const step = async (s) => {
+        const { inp, tgt } = sampleBatch(fake, p.batch, cfg.ctx, rng);
+        model.setBatch(inp, tgt);
+        await model.trainStep({ lr: 1e-4, wd: 0.1, t: s, maxNorm: 1 });
+      };
+      // Aufwärmen: Shader kompilieren, Speicher anlegen
+      const w0 = performance.now();
+      await step(1);
+      if (be.kind !== 'cpu') await step(2);
+      const warmMs = performance.now() - w0;
+      const t0 = performance.now();
+      let n = 0;
+      while (n < 10 && (n < 2 || performance.now() - t0 < BENCH_BUDGET_MS)) {
+        await step(3 + n);
+        n += 1;
+        if (performance.now() - t0 > BENCH_GIVE_UP_MS && n >= 1) break;
+      }
+      const sec = (performance.now() - t0) / 1000 / n;
+      Object.assign(entry, { msPerStep: sec * 1000, tokensPerSec: (p.batch * cfg.ctx) / sec, minutesPer1000: (sec * 1000) / 60, steps: n });
+      if (sec * 1000 > BENCH_GIVE_UP_MS || warmMs > 4 * BENCH_GIVE_UP_MS) tooSlow = true;
+    } catch (e) {
+      entry.error = e.message;
+    } finally {
+      be.destroy?.();
+    }
+    results.push(entry);
+    post({ type: 'benchmark', entry });
+  }
+  return { kind, adapter, gflops, results, engine: ENGINE_VERSION };
+}
+
+// Reine Rechenleistung: C = A · Bᵀ mit 1024×1024-Matrizen (CPU: 256×256).
+async function matmulGflops(be) {
+  const n = be.kind === 'cpu' ? 256 : 1024, reps = be.kind === 'cpu' ? 2 : 20;
+  const A = be.alloc(n * n), B = be.alloc(n * n), C = be.alloc(n * n);
+  const rng = makeRng(1);
+  const data = Float32Array.from({ length: n * n }, () => rng.random() - 0.5);
+  be.write(A, data); be.write(B, data);
+  be.matmul(C, A, B, n, n, n, false, true);
+  await be.read(be.view(C, 0, 1));
+  const t0 = performance.now();
+  for (let r = 0; r < reps; r++) be.matmul(C, A, B, n, n, n, false, true);
+  await be.read(be.view(C, 0, 1));
+  return (2 * n * n * n * reps) / ((performance.now() - t0) / 1000) / 1e9;
+}
+//#endregion
+
 async function exportModel({ name }) {
   const params = await currentParams();
   const bytes = writeGGUF(S.cfg, params, S.tok, name);
@@ -210,6 +290,10 @@ onmessage = async (e) => {
         break;
       }
       case 'export': { const r = await exportModel(msg); reply(r, [r.gguf.buffer]); break; }
+      case 'benchmark':
+        if (S.running) throw new Error('Während des Trainings kann nicht gemessen werden. Pausiere zuerst.');
+        reply(await benchmark(msg));
+        break;
       case 'reset': S.running = false; await deleteCheckpoint(CHECKPOINT); reply({}); break;
       default: break;
     }

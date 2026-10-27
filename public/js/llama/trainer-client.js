@@ -46,6 +46,7 @@ export function createTrainerClient() {
     generate: (opts, onToken) => request({ type: 'generate', ...opts }, onToken),
     exportModel: (name) => request({ type: 'export', name }),
     reset: () => request({ type: 'reset' }),
+    benchmark: (presets, prefer, vocab) => request({ type: 'benchmark', presets, prefer, vocab }),
     on: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
   };
 }

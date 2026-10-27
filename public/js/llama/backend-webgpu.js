@@ -11,6 +11,8 @@
 // Geprüft wird jeder Shader gegen die CPU-Version (tests/webgpu-check.html).
 
 const WG = 256;  // Threads pro Workgroup für einfache Operationen
+// Wird bei jeder Änderung an den Shadern erhöht, damit Benchmarks vergleichbar bleiben.
+export const ENGINE_VERSION = 1;
 
 // Ein Element-Index, der auch bei mehr als 65535 Workgroups funktioniert.
 const IDX = `let i = gid.x + gid.y * nwg.x * ${WG}u;`;
@@ -661,6 +663,13 @@ export async function createWebGpuBackend() {
         device.queue.writeBuffer(stepUniforms, 0, new Float32Array([hp.lr, hp.beta1, hp.beta2, hp.eps, 1 - hp.beta1 ** hp.t, 1 - hp.beta2 ** hp.t, hp.maxNorm, 0]));
       }
       run('adamw', [p, g, m, v, normSq], [['u', n], ['f', hp.wd]], elemGroups(n), stepUniforms);
+    },
+    // Für den Benchmark: Speicherfehler beim Anlegen erkennen, statt das Device zu verlieren.
+    pushOomScope() { device.pushErrorScope('out-of-memory'); device.pushErrorScope('validation'); },
+    async popOomScope() {
+      const validation = await device.popErrorScope();
+      const oom = await device.popErrorScope();
+      return oom || validation;
     },
     destroy() { device.destroy(); },
   };

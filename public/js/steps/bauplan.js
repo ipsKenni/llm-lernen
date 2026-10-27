@@ -11,6 +11,8 @@ const PRESET_NOTES = {
   mittel: 'Braucht eine kräftige Grafikkarte und Geduld.',
 };
 
+const durationText = (min) => (min < 1 ? `${Math.max(1, Math.round(min * 60))} s` : min < 90 ? `${fmt(min, min < 10 ? 1 : 0)} min` : `${fmt(min / 60, 1)} h`);
+
 const SVG = 'http://www.w3.org/2000/svg';
 const el = (tag, attrs, parent) => {
   const e = document.createElementNS(SVG, tag);
@@ -92,9 +94,12 @@ export function init(root) {
       const memory = document.createElement('span');
       // Ohne GPU schafft JavaScript grob 1 Milliarde Rechenschritte pro Sekunde.
       const cpuMinutes = (trainFlopsPerToken(cfg) * p.batch * p.ctx * 1000) / 1e9 / 60;
-      memory.textContent = cpuOnly
-        ? `Auf dem Prozessor ca. ${cpuMinutes < 1.5 ? '1' : int(cpuMinutes)} min pro 1.000 Schritte`
-        : `Speicher beim Training ca. ${int(mem / 2 ** 20)} MB`;
+      const measured = S.bench?.results.find((e) => e.preset === key && !e.error);
+      memory.textContent = measured
+        ? `Gemessen: ${durationText(measured.minutesPer1000)} pro 1.000 Schritte`
+        : cpuOnly
+          ? `Auf dem Prozessor ca. ${cpuMinutes < 1.5 ? '1' : int(cpuMinutes)} min pro 1.000 Schritte`
+          : `Speicher beim Training ca. ${int(mem / 2 ** 20)} MB`;
       const note = document.createElement('span');
       note.textContent = PRESET_NOTES[key];
       b.append(title, dims, memory, note);
@@ -109,6 +114,53 @@ export function init(root) {
     const perStep = p.batch * p.ctx;
     $('#preset-info').textContent = `Pro Trainingsschritt lernt das Modell aus ${p.batch} Textstücken mit je ${p.ctx} Tokens, also ${int(perStep)} Tokens. ${S.tokInfo ? `Nach 2.000 Schritten hat es rund ${fmt((2000 * perStep) / S.tokInfo.trainTokens, 1)}-mal den ganzen Datensatz gesehen.` : ''}`;
   }
+
+  // --- Benchmark ---------------------------------------------------------
+  const benchBtn = $('#bench-run');
+  const benchBody = $('#bench-body');
+  let benchText = '';
+  function benchRow(e) {
+    const tr = document.createElement('tr');
+    const cells = e.error
+      ? [PRESETS[e.preset].label, `${fmt(e.params / 1e6, 2)} Mio.`, `nicht möglich: ${e.error}`, '–', '–']
+      : [PRESETS[e.preset].label, `${fmt(e.params / 1e6, 2)} Mio.`, int(e.tokensPerSec), `${int(e.msPerStep)} ms`, durationText(e.minutesPer1000)];
+    for (const c of cells) { const td = document.createElement('td'); td.textContent = c; tr.append(td); }
+    return tr;
+  }
+  p2.trainer.on((m) => { if (m.type === 'benchmark') benchBody.append(benchRow(m.entry)); });
+  benchBtn.addEventListener('click', async () => {
+    if (S.running) { $('#bench-status').textContent = 'Pausiere zuerst das Training in Schritt 9.'; return; }
+    benchBtn.disabled = true;
+    benchBody.replaceChildren();
+    $('#bench-wrap').hidden = false;
+    $('#bench-copy').hidden = true;
+    const cpuOnly = S.gpu === null;
+    const presets = Object.keys(PRESETS).filter((k) => !cpuOnly || CPU_PRESETS.has(k));
+    $('#bench-status').textContent = 'Messe …';
+    try {
+      const r = await p2.trainer.benchmark(presets, cpuOnly ? 'cpu' : 'auto', S.tokenizer?.vocabSize ?? 2048);
+      S.bench = r;
+      const where = r.kind === 'webgpu' ? `WebGPU (${[r.adapter?.vendor, r.adapter?.architecture, r.adapter?.description].filter(Boolean).join(', ') || 'unbekannte GPU'})` : 'Prozessor (kein WebGPU)';
+      $('#bench-status').textContent = `Gemessen auf: ${where}. Reine Rechenleistung der Matrixmultiplikation: ${fmt(r.gflops, 1)} GFLOP/s.`;
+      benchText = [
+        `Benchmark llm.ips.codes, Engine ${r.engine}, ${new Date().toLocaleString('de-DE')}`,
+        `Gerät: ${where}`,
+        `Matmul: ${fmt(r.gflops, 1)} GFLOP/s`,
+        ...r.results.map((e) => (e.error ? `${PRESETS[e.preset].label}: ${e.error}` : `${PRESETS[e.preset].label}: ${int(e.tokensPerSec)} Tokens/s, ${int(e.msPerStep)} ms/Schritt`)),
+        `Browser: ${navigator.userAgent}`,
+      ].join('\n');
+      $('#bench-copy').hidden = false;
+      render();
+    } catch (e) {
+      $('#bench-status').textContent = `Messung fehlgeschlagen: ${e.message}`;
+    } finally {
+      benchBtn.disabled = false;
+    }
+  });
+  $('#bench-copy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(benchText); $('#bench-copy').textContent = 'Kopiert'; } catch { $('#bench-copy').textContent = 'Kopieren nicht erlaubt'; }
+    setTimeout(() => { $('#bench-copy').textContent = 'Ergebnis kopieren'; }, 1500);
+  });
 
   p2.on((what) => { if (['gpu', 'preset', 'tokenized', 'restored', 'setup'].includes(what)) render(); });
   render();
