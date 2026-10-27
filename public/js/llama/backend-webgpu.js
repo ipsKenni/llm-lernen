@@ -12,71 +12,83 @@
 
 const WG = 256;  // Threads pro Workgroup für einfache Operationen
 // Wird bei jeder Änderung an den Shadern erhöht, damit Benchmarks vergleichbar bleiben.
-export const ENGINE_VERSION = 1;
+export const ENGINE_VERSION = 2;
 
 // Ein Element-Index, der auch bei mehr als 65535 Workgroups funktioniert.
 const IDX = `let i = gid.x + gid.y * nwg.x * ${WG}u;`;
 const ELEM_ARGS = '@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u';
 
 //#region webgpu-matmul
-// Gekachelte Matrixmultiplikation: Jede Workgroup berechnet eine 64×64-Kachel
-// von C, jeder ihrer 256 Threads davon 4×4 Werte. A- und B-Stücke werden
-// gemeinsam in den schnellen Workgroup-Speicher geladen und von allen
+// Gekachelte Matrixmultiplikation: Jede Workgroup (16×16 Threads) berechnet eine
+// Kachel von C; jeder Thread davon TM×TN Werte. A- und B-Stücke der Tiefe BK
+// werden gemeinsam in den schnellen Workgroup-Speicher geladen und von allen
 // Threads wiederverwendet – das ist der wichtigste Trick schneller GPUs.
-function matmulShader(transA, transB) {
+// Welche Kachelgröße am schnellsten ist, hängt von der GPU ab; autotune() misst.
+export const MATMUL_VARIANTS = [
+  { TM: 4, TN: 4, BK: 16 },   // 64×64-Kachel (Engine 1)
+  { TM: 8, TN: 4, BK: 16 },   // 128×64
+  { TM: 4, TN: 8, BK: 16 },   // 64×128
+  { TM: 8, TN: 8, BK: 8 },    // 128×128, viele Register
+];
+
+function matmulShader(transA, transB, { TM, TN, BK }) {
+  const BM = 16 * TM, BN = 16 * TN;
   const aAt = transA ? 'A[gk * p.M + gm]' : 'A[gm * p.K + gk]';
   const bAt = transB ? 'B[gn * p.K + gk]' : 'B[gk * p.N + gn]';
   // Lade-Reihenfolge so, dass benachbarte Threads benachbarte Adressen lesen.
-  const aIdx = transA ? 'let m = e % 64u; let k = e / 64u;' : 'let m = e / 16u; let k = e % 16u;';
-  const bIdx = transB ? 'let n = e / 16u; let k = e % 16u;' : 'let n = e % 64u; let k = e / 64u;';
+  const aIdx = transA ? `let m = e % ${BM}u; let k = e / ${BM}u;` : `let m = e / ${BK}u; let k = e % ${BK}u;`;
+  const bIdx = transB ? `let n = e / ${BK}u; let k = e % ${BK}u;` : `let n = e % ${BN}u; let k = e / ${BN}u;`;
   return /* wgsl */ `
 struct P { M: u32, N: u32, K: u32, beta: f32 }
 @group(0) @binding(0) var<storage, read> A: array<f32>;
 @group(0) @binding(1) var<storage, read> B: array<f32>;
 @group(0) @binding(2) var<storage, read_write> C: array<f32>;
 @group(0) @binding(3) var<uniform> p: P;
-var<workgroup> As: array<f32, 1024>;  // [16][64]
-var<workgroup> Bs: array<f32, 1024>;  // [16][64]
+var<workgroup> As: array<f32, ${BK * BM}>;  // [BK][BM]
+var<workgroup> Bs: array<f32, ${BK * BN}>;  // [BK][BN]
 @compute @workgroup_size(16, 16)
 fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_id) lid: vec3u) {
-  let row0 = wg.y * 64u;
-  let col0 = wg.x * 64u;
+  let row0 = wg.y * ${BM}u;
+  let col0 = wg.x * ${BN}u;
   let tid = lid.y * 16u + lid.x;
-  var acc: array<f32, 16>;
-  for (var k0 = 0u; k0 < p.K; k0 += 16u) {
-    for (var r = 0u; r < 4u; r++) {
+  var acc: array<f32, ${TM * TN}>;
+  for (var k0 = 0u; k0 < p.K; k0 += ${BK}u) {
+    for (var r = 0u; r < ${(BM * BK) / 256}u; r++) {
       let e = tid + r * 256u;
-      { ${aIdx}
-        let gm = row0 + m; let gk = k0 + k;
-        var v = 0.0;
-        if (gm < p.M && gk < p.K) { v = ${aAt}; }
-        As[k * 64u + m] = v; }
-      { ${bIdx}
-        let gn = col0 + n; let gk = k0 + k;
-        var v = 0.0;
-        if (gn < p.N && gk < p.K) { v = ${bAt}; }
-        Bs[k * 64u + n] = v; }
+      ${aIdx}
+      let gm = row0 + m; let gk = k0 + k;
+      var v = 0.0;
+      if (gm < p.M && gk < p.K) { v = ${aAt}; }
+      As[k * ${BM}u + m] = v;
+    }
+    for (var r = 0u; r < ${(BN * BK) / 256}u; r++) {
+      let e = tid + r * 256u;
+      ${bIdx}
+      let gn = col0 + n; let gk = k0 + k;
+      var v = 0.0;
+      if (gn < p.N && gk < p.K) { v = ${bAt}; }
+      Bs[k * ${BN}u + n] = v;
     }
     workgroupBarrier();
-    for (var k = 0u; k < 16u; k++) {
-      var a: array<f32, 4>;
-      var b: array<f32, 4>;
-      for (var i = 0u; i < 4u; i++) { a[i] = As[k * 64u + lid.y + i * 16u]; }
-      for (var j = 0u; j < 4u; j++) { b[j] = Bs[k * 64u + lid.x + j * 16u]; }
-      for (var i = 0u; i < 4u; i++) {
-        for (var j = 0u; j < 4u; j++) { acc[i * 4u + j] = fma(a[i], b[j], acc[i * 4u + j]); }
+    for (var k = 0u; k < ${BK}u; k++) {
+      var a: array<f32, ${TM}>;
+      var b: array<f32, ${TN}>;
+      for (var i = 0u; i < ${TM}u; i++) { a[i] = As[k * ${BM}u + lid.y + i * 16u]; }
+      for (var j = 0u; j < ${TN}u; j++) { b[j] = Bs[k * ${BN}u + lid.x + j * 16u]; }
+      for (var i = 0u; i < ${TM}u; i++) {
+        for (var j = 0u; j < ${TN}u; j++) { acc[i * ${TN}u + j] = fma(a[i], b[j], acc[i * ${TN}u + j]); }
       }
     }
     workgroupBarrier();
   }
-  for (var i = 0u; i < 4u; i++) {
+  for (var i = 0u; i < ${TM}u; i++) {
     let m = row0 + lid.y + i * 16u;
     if (m >= p.M) { continue; }
-    for (var j = 0u; j < 4u; j++) {
+    for (var j = 0u; j < ${TN}u; j++) {
       let n = col0 + lid.x + j * 16u;
       if (n >= p.N) { continue; }
       let o = m * p.N + n;
-      if (p.beta == 0.0) { C[o] = acc[i * 4u + j]; } else { C[o] = C[o] + acc[i * 4u + j]; }
+      if (p.beta == 0.0) { C[o] = acc[i * ${TN}u + j]; } else { C[o] = C[o] + acc[i * ${TN}u + j]; }
     }
   }
 }`;
@@ -374,6 +386,19 @@ struct P { n: u32 }
   x[i] = x[i] + y[i];
 }`,
 
+  // Residual-Verbindung in einem Durchgang: out = a + b (statt copy + add).
+  add3: /* wgsl */ `
+struct P { n: u32 }
+@group(0) @binding(0) var<storage, read_write> out: array<f32>;
+@group(0) @binding(1) var<storage, read> a: array<f32>;
+@group(0) @binding(2) var<storage, read> b: array<f32>;
+@group(0) @binding(3) var<uniform> p: P;
+@compute @workgroup_size(${WG}) fn main(${ELEM_ARGS}) {
+  ${IDX}
+  if (i >= p.n) { return; }
+  out[i] = a[i] + b[i];
+}`,
+
   copy: /* wgsl */ `
 struct P { n: u32 }
 @group(0) @binding(0) var<storage, read_write> x: array<f32>;
@@ -489,7 +514,9 @@ export async function createWebGpuBackend() {
   const pipelines = {};
   const pipeline = (name) => {
     if (!pipelines[name]) {
-      const code = name.startsWith('matmul') ? matmulShader(name[6] === 'T', name[7] === 'T') : SHADERS[name];
+      const code = name.startsWith('matmul')
+        ? matmulShader(name[6] === 'T', name[7] === 'T', MATMUL_VARIANTS[Number(name.split('_')[1])])
+        : SHADERS[name];
       pipelines[name] = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code, label: name }), entryPoint: 'main' } });
     }
     return pipelines[name];
@@ -521,6 +548,8 @@ export async function createWebGpuBackend() {
 
   let encoder = null;
   let pass = null;
+  const variant = { NT: 0, NN: 0, TN: 0 };   // gewählte Matmul-Variante je Art
+  const stagingPool = new Map();
   const begin = () => {
     if (!encoder) encoder = device.createCommandEncoder();
     if (!pass) pass = encoder.beginComputePass();
@@ -610,7 +639,57 @@ export async function createWebGpuBackend() {
     async flush() { submit(); },
 
     matmul(C, A, B, M, N, K, transA, transB, beta = 0) {
-      run(`matmul${transA ? 'T' : 'N'}${transB ? 'T' : 'N'}`, [A, B, C], [['u', M], ['u', N], ['u', K], ['f', beta]], [Math.ceil(N / 64), Math.ceil(M / 64)]);
+      const mode = `${transA ? 'T' : 'N'}${transB ? 'T' : 'N'}`;
+      const vi = variant[mode];
+      const v = MATMUL_VARIANTS[vi];
+      run(`matmul${mode}_${vi}`, [A, B, C], [['u', M], ['u', N], ['u', K], ['f', beta]], [Math.ceil(N / (16 * v.TN)), Math.ceil(M / (16 * v.TM))]);
+    },
+    add3(out, a, b, n) { run('add3', [out, a, b], [['u', n]], elemGroups(n)); },
+    // Ohne zu warten zurücklesen: Der Wert kommt, sobald die GPU so weit ist.
+    // So kann die GPU schon den nächsten Schritt rechnen (Pipelining).
+    readAsync(h) {
+      submit();
+      const bytes = Math.ceil(Math.max(4, h.size * 4) / 4) * 4;
+      const pool = stagingPool.get(bytes) || [];
+      stagingPool.set(bytes, pool);
+      const staging = pool.pop() || device.createBuffer({ size: bytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+      const enc = device.createCommandEncoder();
+      enc.copyBufferToBuffer(h.buffer, h.offset * 4, staging, 0, bytes);
+      device.queue.submit([enc.finish()]);
+      return staging.mapAsync(GPUMapMode.READ).then(() => {
+        const out = new Float32Array(staging.getMappedRange().slice(0, h.size * 4));
+        staging.unmap();
+        pool.push(staging);
+        return out;
+      });
+    },
+    get matmulVariant() { return { ...variant }; },
+    setMatmulVariant(v) { Object.assign(variant, v); },
+    // Kurze Messung auf der echten GPU: Welche Kachelgröße ist pro Matmul-Art am schnellsten?
+    // shapes: { NT: [M, N, K], NN: [...], TN: [...] } – typische Größen des Modells.
+    async autotune(shapes) {
+      if (adapter.isFallbackAdapter || adapter.info?.isFallbackAdapter || be.adapterInfo.architecture === 'swiftshader') return { ...variant, skipped: true };
+      const times = {};
+      for (const [mode, [M, N, K]] of Object.entries(shapes)) {
+        const A = alloc(M * K), B = alloc(K * N), C = alloc(M * N);
+        const transA = mode[0] === 'T', transB = mode[1] === 'T';
+        let best = 0, bestMs = Infinity;
+        times[mode] = [];
+        for (let vi = 0; vi < MATMUL_VARIANTS.length; vi++) {
+          variant[mode] = vi;
+          be.matmul(C, A, B, M, N, K, transA, transB);
+          await be.read(be.view(C, 0, 1));            // Shader kompilieren, aufwärmen
+          const t0 = performance.now();
+          for (let r = 0; r < 5; r++) be.matmul(C, A, B, M, N, K, transA, transB);
+          await be.read(be.view(C, 0, 1));
+          const ms = (performance.now() - t0) / 5;
+          times[mode].push(ms);
+          if (ms < bestMs) { bestMs = ms; best = vi; }
+        }
+        variant[mode] = best;
+        for (const b of [A, B, C]) b.buffer.destroy();
+      }
+      return { ...variant, times };
     },
     embed(out, E, tokens, N, d) { run('embed', [out, E, tokens], [['u', N], ['u', d]], elemGroups(N * d)); },
     embedBwd(dE, dx, tokens, N, d) {

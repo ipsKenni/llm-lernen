@@ -38,39 +38,42 @@ const result = await page.evaluate(async () => {
     { label: 'realistisch (head_dim 64)', cfg: { vocabSize: 300, dim: 128, nLayers: 2, nHeads: 2, nKvHeads: 1, headDim: 64, ffnDim: 384, ctx: 64, ropeBase: 10000, normEps: 1e-5 }, batch: 2 },
   ];
   const out = [];
+  const { MATMUL_VARIANTS } = await import('/public/js/llama/backend-webgpu.js');
   for (const { label, cfg, batch } of configs) {
-    const rng = makeRng(3);
-    const N = batch * cfg.ctx;
-    const inp = Int32Array.from({ length: N }, () => rng.int(cfg.vocabSize));
-    const tgt = Int32Array.from({ length: N }, () => rng.int(cfg.vocabSize));
-    const mk = (be) => { const m = createLlama(cfg, be, { batch }); return m; };
-    const mc = mk(createCpuBackend()), mg = mk(gpu);
-    const p0 = mc.initialParams(5).map((x) => x * 5);
-    for (const t of mc.layout.tensors) if (t.kind === 'norm') for (let i = 0; i < t.size; i++) p0[t.offset + i] = 0.5 + rng.random();
-    mc.setParams(p0); mg.setParams(p0);
-    mc.setBatch(inp, tgt); mg.setBatch(inp, tgt);
-    const lc = await mc.lossAndGrads(), lg = await mg.lossAndGrads();
-    const gc = await mc.readGrads(), gg = await mg.readGrads();
-    const perTensor = mc.layout.tensors.map((t) => {
-      let maxAbs = 0, maxDiff = 0;
-      for (let i = t.offset; i < t.offset + t.size; i++) { maxAbs = Math.max(maxAbs, Math.abs(gc[i])); maxDiff = Math.max(maxDiff, Math.abs(gc[i] - gg[i])); }
-      return { name: t.name, rel: maxDiff / (maxAbs || 1) };
-    });
-    const worst = perTensor.reduce((a, b) => (b.rel > a.rel ? b : a));
-    // drei echte Lernschritte
-    for (let s = 1; s <= 3; s++) {
-      await mc.trainStep({ lr: 1e-3, wd: 0.1, t: s });
-      await mg.trainStep({ lr: 1e-3, wd: 0.1, t: s });
+    for (let vi = 0; vi < MATMUL_VARIANTS.length; vi++) {
+      gpu.setMatmulVariant({ NT: vi, NN: vi, TN: vi });
+      const rng = makeRng(3);
+      const N = batch * cfg.ctx;
+      const inp = Int32Array.from({ length: N }, () => rng.int(cfg.vocabSize));
+      const tgt = Int32Array.from({ length: N }, () => rng.int(cfg.vocabSize));
+      const mc = createLlama(cfg, createCpuBackend(), { batch }), mg = createLlama(cfg, gpu, { batch });
+      const p0 = mc.initialParams(5).map((x) => x * 5);
+      for (const t of mc.layout.tensors) if (t.kind === 'norm') for (let i = 0; i < t.size; i++) p0[t.offset + i] = 0.5 + rng.random();
+      mc.setParams(p0); mg.setParams(p0);
+      mc.setBatch(inp, tgt); mg.setBatch(inp, tgt);
+      const lc = await mc.lossAndGrads(), lg = await mg.lossAndGrads();
+      const gc = await mc.readGrads(), gg = await mg.readGrads();
+      const perTensor = mc.layout.tensors.map((t) => {
+        let maxAbs = 0, maxDiff = 0;
+        for (let i = t.offset; i < t.offset + t.size; i++) { maxAbs = Math.max(maxAbs, Math.abs(gc[i])); maxDiff = Math.max(maxDiff, Math.abs(gc[i] - gg[i])); }
+        return { name: t.name, rel: maxDiff / (maxAbs || 1) };
+      });
+      const worst = perTensor.reduce((a, b) => (b.rel > a.rel ? b : a));
+      // drei echte Lernschritte: CPU wartend, GPU mit Pipelining (queueStep)
+      const gpuLosses = [];
+      for (let s = 1; s <= 3; s++) {
+        await mc.trainStep({ lr: 1e-3, wd: 0.1, t: s });
+        gpuLosses.push(mg.queueStep({ lr: 1e-3, wd: 0.1, t: s }));
+      }
+      await Promise.all(gpuLosses);
+      // Adam normiert jeden Schritt auf ~lr; bei Gradienten nahe 0 kann Float-Rauschen
+      // die Richtung umdrehen. Aussagekräftig ist daher der Loss nach dem Training.
+      const pc = await mc.readParams(), pg = await mg.readParams();
+      let pDiff = 0;
+      for (let i = 0; i < pc.length; i++) pDiff = Math.max(pDiff, Math.abs(pc[i] - pg[i]));
+      const afterCpu = await mc.loss(), afterGpu = await mg.loss();
+      out.push({ label: `${label}, Matmul-Variante ${vi}`, lossCpu: lc, lossGpu: lg, worst, pDiff, afterCpu, afterGpu });
     }
-    // Adam normiert jeden Schritt auf ~lr; bei Gradienten nahe 0 kann Float-Rauschen
-    // die Richtung umdrehen. Aussagekräftig ist daher der Loss nach dem Training.
-    const pc = await mc.readParams(), pg = await mg.readParams();
-    let pDiff = 0;
-    for (let i = 0; i < pc.length; i++) pDiff = Math.max(pDiff, Math.abs(pc[i] - pg[i]));
-    const afterCpu = await mc.loss(), afterGpu = await mg.loss();
-    const t0 = performance.now();
-    for (let s = 4; s <= 6; s++) await mg.trainStep({ lr: 1e-3, wd: 0.1, t: s });
-    out.push({ label, lossCpu: lc, lossGpu: lg, worst, pDiff, afterCpu, afterGpu, msPerStep: (performance.now() - t0) / 3 });
   }
   return { adapter: gpu.adapterInfo, out };
 });

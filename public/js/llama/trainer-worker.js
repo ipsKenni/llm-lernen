@@ -66,6 +66,7 @@ async function setup({ preset, prefer = 'auto' }) {
   if (!S.backend) S.backend = createCpuBackend();
   S.model = createLlama(S.cfg, S.backend, { batch: p.batch });
   S.model.setParams(S.model.initialParams(1));
+  S.tuning = (await S.backend.autotune?.(S.model.matmulShapes())) ?? null;
   Object.assign(S, { step: 0, history: [], evals: [], samples: [], paramsCache: null, paramsStep: -1, rng: makeRng(7) });
   return describe();
 }
@@ -140,6 +141,14 @@ async function trainLoop() {
   const B = model.batch;
   const evalEvery = Math.max(25, Math.round(S.total / 40));
   let t0 = performance.now(), stepsSince = 0, lastSave = performance.now();
+  // Bis zu zwei Schritte gleichzeitig unterwegs: Während die GPU rechnet,
+  // bereitet JavaScript schon den nächsten Batch vor (Pipelining).
+  const pending = [];
+  const settle = async () => {
+    const loss = await pending.shift();
+    if (!Number.isFinite(loss)) throw new Error('Der Loss ist explodiert (NaN). Versuch es mit einem kleineren Modell oder starte neu.');
+    S.history.push(loss);
+  };
   while (S.running && S.step < S.total) {
     const chunkStart = performance.now();
     // Mehrere Schritte am Stück, dann kurz Luft holen (Nachrichten annehmen).
@@ -147,13 +156,16 @@ async function trainLoop() {
       const { inp, tgt } = sampleBatch(S.streams.train, B, cfg.ctx, S.rng);
       model.setBatch(inp, tgt);
       const lr = learningRate(S.step, S.total, S.maxLr);
-      const loss = await model.trainStep({ lr, wd: 0.1, t: S.step + 1, maxNorm: 1 });
-      if (!Number.isFinite(loss)) throw new Error('Der Loss ist explodiert (NaN). Versuch es mit einem kleineren Modell oder starte neu.');
+      pending.push(model.queueStep({ lr, wd: 0.1, t: S.step + 1, maxNorm: 1 }));
       S.step += 1;
-      S.history.push(loss);
       stepsSince += 1;
-      if (S.step % evalEvery === 0 || S.step === S.total) await evaluate();
+      if (pending.length >= 2) await settle();
+      if (S.step % evalEvery === 0 || S.step === S.total) {
+        while (pending.length) await settle();
+        await evaluate();
+      }
     }
+    while (pending.length) await settle();
     const elapsed = (performance.now() - t0) / 1000;
     post({
       type: 'progress', step: S.step, total: S.total, losses: S.history.slice(S.history.length - stepsSince),
@@ -179,9 +191,42 @@ async function trainLoop() {
 const BENCH_BUDGET_MS = 10000;
 const BENCH_GIVE_UP_MS = 15000;
 
+async function measure(cfg, p, be, { legacy = false } = {}) {
+  be.pushOomScope?.();
+  const model = createLlama(cfg, be, { batch: p.batch, fused: !legacy });
+  model.setParams(model.initialParams(1));
+  const err = await be.popOomScope?.();
+  if (err) throw new Error('nicht genug Grafikspeicher');
+  if (legacy) be.setMatmulVariant?.({ NT: 0, NN: 0, TN: 0 });
+  else await be.autotune?.(model.matmulShapes());
+  const rng = makeRng(5);
+  const fake = Int32Array.from({ length: 4096 }, () => rng.int(cfg.vocabSize));
+  const hp = (t) => ({ lr: 1e-4, wd: 0.1, t, maxNorm: 1 });
+  const feed = () => { const { inp, tgt } = sampleBatch(fake, p.batch, cfg.ctx, rng); model.setBatch(inp, tgt); };
+  // Aufwärmen: Shader kompilieren, Speicher anlegen
+  const w0 = performance.now();
+  feed(); await model.trainStep(hp(1));
+  if (be.kind !== 'cpu') { feed(); await model.trainStep(hp(2)); }
+  const warmMs = performance.now() - w0;
+  const t0 = performance.now();
+  let n = 0;
+  const pending = [];
+  while (n < 10 && (n < 2 || performance.now() - t0 < BENCH_BUDGET_MS)) {
+    feed();
+    if (legacy) await model.trainStep(hp(3 + n));          // Engine 1: auf jeden Schritt warten
+    else { pending.push(model.queueStep(hp(3 + n))); if (pending.length >= 2) await pending.shift(); }
+    n += 1;
+    if (performance.now() - t0 > BENCH_GIVE_UP_MS) break;
+  }
+  await Promise.all(pending);
+  const sec = (performance.now() - t0) / 1000 / n;
+  return { msPerStep: sec * 1000, tokensPerSec: (p.batch * cfg.ctx) / sec, minutesPer1000: (sec * 1000) / 60, steps: n, warmMs };
+}
+
 async function benchmark({ presets, prefer = 'auto', vocab = 2048 }) {
   const results = [];
-  let adapter = null, kind = 'cpu', gflops = null, tooSlow = false;
+  let adapter = null, kind = 'cpu', gflops = null, tooSlow = false, compare = null;
+  const newBackend = async () => (prefer === 'cpu' ? null : await createWebGpuBackend().catch(() => null)) || createCpuBackend();
   for (const key of presets) {
     const p = PRESETS[key];
     const cfg = makeConfig(p, vocab);
@@ -192,38 +237,15 @@ async function benchmark({ presets, prefer = 'auto', vocab = 2048 }) {
       post({ type: 'benchmark', entry });
       continue;
     }
-    const be = (prefer === 'cpu' ? null : await createWebGpuBackend().catch(() => null)) || createCpuBackend();
+    const be = await newBackend();
     kind = be.kind;
     adapter = be.adapterInfo || null;
     try {
       if (gflops === null) gflops = await matmulGflops(be);
-      be.pushOomScope?.();
-      const model = createLlama(cfg, be, { batch: p.batch });
-      model.setParams(model.initialParams(1));
-      const err = await be.popOomScope?.();
-      if (err) throw new Error('nicht genug Grafikspeicher');
-      const rng = makeRng(5);
-      const fake = Int32Array.from({ length: 4096 }, () => rng.int(vocab));
-      const step = async (s) => {
-        const { inp, tgt } = sampleBatch(fake, p.batch, cfg.ctx, rng);
-        model.setBatch(inp, tgt);
-        await model.trainStep({ lr: 1e-4, wd: 0.1, t: s, maxNorm: 1 });
-      };
-      // Aufwärmen: Shader kompilieren, Speicher anlegen
-      const w0 = performance.now();
-      await step(1);
-      if (be.kind !== 'cpu') await step(2);
-      const warmMs = performance.now() - w0;
-      const t0 = performance.now();
-      let n = 0;
-      while (n < 10 && (n < 2 || performance.now() - t0 < BENCH_BUDGET_MS)) {
-        await step(3 + n);
-        n += 1;
-        if (performance.now() - t0 > BENCH_GIVE_UP_MS && n >= 1) break;
-      }
-      const sec = (performance.now() - t0) / 1000 / n;
-      Object.assign(entry, { msPerStep: sec * 1000, tokensPerSec: (p.batch * cfg.ctx) / sec, minutesPer1000: (sec * 1000) / 60, steps: n });
-      if (sec * 1000 > BENCH_GIVE_UP_MS || warmMs > 4 * BENCH_GIVE_UP_MS) tooSlow = true;
+      const m = await measure(cfg, p, be);
+      Object.assign(entry, m);
+      if (be.kind !== 'cpu') entry.variant = be.matmulVariant;
+      if (m.msPerStep > BENCH_GIVE_UP_MS || m.warmMs > 4 * BENCH_GIVE_UP_MS) tooSlow = true;
     } catch (e) {
       entry.error = e.message;
     } finally {
@@ -232,7 +254,22 @@ async function benchmark({ presets, prefer = 'auto', vocab = 2048 }) {
     results.push(entry);
     post({ type: 'benchmark', entry });
   }
-  return { kind, adapter, gflops, results, engine: ENGINE_VERSION };
+  // Vergleich mit Engine 1 (ohne Pipelining, Fusion und Autotuning) an der
+  // größten Größe, die noch flott läuft.
+  const pick = [...results].reverse().find((e) => !e.error && e.msPerStep < 3000);
+  if (pick && kind === 'webgpu') {
+    const be = await newBackend();
+    try {
+      const p = PRESETS[pick.preset];
+      const old = await measure(makeConfig(p, vocab), p, be, { legacy: true });
+      compare = { preset: pick.preset, oldMs: old.msPerStep, newMs: pick.msPerStep, speedup: old.msPerStep / pick.msPerStep };
+    } catch (e) {
+      compare = { preset: pick.preset, error: e.message };
+    } finally {
+      be.destroy?.();
+    }
+  }
+  return { kind, adapter, gflops, results, compare, engine: ENGINE_VERSION };
 }
 
 // Reine Rechenleistung: C = A · Bᵀ mit 1024×1024-Matrizen (CPU: 256×256).

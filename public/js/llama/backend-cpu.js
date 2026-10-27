@@ -213,6 +213,7 @@ export function createCpuBackend(ArrayType = Float32Array) {
   //#endregion
 
   function add(x, y, n) { for (let i = 0; i < n; i++) x[i] += y[i]; }
+  function add3(out, a, b, n) { for (let i = 0; i < n; i++) out[i] = a[i] + b[i]; }
   function copy(dst, src, n) { dst.set(src.subarray(0, n)); }
 
   //#region cpu-cross-entropy
@@ -262,7 +263,8 @@ export function createCpuBackend(ArrayType = Float32Array) {
     write: (buf, data, offset = 0) => buf.set(data, offset),
     read: async (buf) => buf.slice(),
     matmul, embed, embedBwd, rmsnorm, rmsnormBwd, rope, attention, attentionBwd,
-    swiglu, swigluBwd, add, copy, zero, crossEntropy, sumSquares, adamw,
+    swiglu, swigluBwd, add, add3, copy, zero, crossEntropy, sumSquares, adamw,
+    readAsync: async (buf) => buf.slice(),
     flush: async () => {},
   };
 }

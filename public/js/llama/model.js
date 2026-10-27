@@ -20,7 +20,7 @@
 import { tensorLayout } from './config.js';
 import { makeRng } from '../rng.js';
 
-export function createLlama(cfg, backend, { batch }) {
+export function createLlama(cfg, backend, { batch, fused = true }) {
   const L = cfg.nLayers, T = cfg.ctx, B = batch, N = B * T;
   const { dim: d, nHeads: H, nKvHeads: KV, headDim: hd, ffnDim: F, vocabSize: V } = cfg;
   const qd = H * hd, kd = KV * hd;
@@ -53,6 +53,13 @@ export function createLlama(cfg, backend, { batch }) {
   const tokens = be.allocInt(N), targets = be.allocInt(N);
   const lossBuf = be.alloc(1), normBuf = be.alloc(1);
 
+  // Residual-Verbindung: out = x + y. Fusioniert in einem Durchgang über den
+  // Speicher; fused = false nutzt den alten Weg (für den Engine-Vergleich).
+  const residual = (out, x, y) => {
+    if (fused) be.add3(out, x, y, N * d);
+    else { be.copy(out, x, N * d); be.add(out, y, N * d); }
+  };
+
   // -------------------------------------------------------------------
   //#region llama-forward
   function forward() {
@@ -68,16 +75,14 @@ export function createLlama(cfg, backend, { batch }) {
       be.rope(A.k, N, T, KV, hd, cfg.ropeBase);
       be.attention(A.o, A.att, A.q, A.k, A.v, B, T, H, KV, hd);
       be.matmul(tmp, A.o, p('attn_output'), N, d, qd, false, true);
-      be.copy(A.xMid, xs[l], N * d);
-      be.add(A.xMid, tmp, N * d);
+      residual(A.xMid, xs[l], tmp);
       // MLP-Hälfte (SwiGLU)
       be.rmsnorm(A.m, A.r2, A.xMid, p('ffn_norm'), N, d, cfg.normEps);
       be.matmul(A.g, A.m, p('ffn_gate'), N, F, d, false, true);
       be.matmul(A.u, A.m, p('ffn_up'), N, F, d, false, true);
       be.swiglu(A.h, A.g, A.u, N * F);
       be.matmul(tmp, A.h, p('ffn_down'), N, d, F, false, true);
-      be.copy(xs[l + 1], A.xMid, N * d);
-      be.add(xs[l + 1], tmp, N * d);
+      residual(xs[l + 1], A.xMid, tmp);
     }
     be.rmsnorm(f, r3, xs[L], P('output_norm.weight'), N, d, cfg.normEps);
     // Weight Tying: Die Ausgabeschicht ist die transponierte Embedding-Matrix.
@@ -125,7 +130,22 @@ export function createLlama(cfg, backend, { batch }) {
 
   //#region llama-step
   // Ein Lernschritt: vorwärts, rückwärts, Gradienten begrenzen, AdamW.
+  // Gibt sofort ein Promise auf den Loss zurück; die GPU rechnet weiter,
+  // während schon der nächste Schritt vorbereitet wird.
+  function queueStep(hp) {
+    encodeStep(hp);
+    return be.readAsync(lossBuf).then((a) => a[0]);
+  }
+
+  // Wie queueStep, aber wartet auf das Ergebnis (einfacher, etwas langsamer).
   async function trainStep(hp) {
+    encodeStep(hp);
+    await be.flush();
+    const [loss] = await be.read(lossBuf);
+    return loss;
+  }
+
+  function encodeStep(hp) {
     forward();
     backward();
     be.sumSquares(grads, layout.total, normBuf);
@@ -135,9 +155,6 @@ export function createLlama(cfg, backend, { batch }) {
         be.view(adamM, t.offset, t.size), be.view(adamV, t.offset, t.size), t.size,
         { lr: hp.lr, beta1: 0.9, beta2: 0.95, eps: 1e-8, wd: decay, t: hp.t, maxNorm: hp.maxNorm ?? 1 }, normBuf);
     }
-    await be.flush();
-    const [loss] = await be.read(lossBuf);
-    return loss;
   }
   //#endregion
 
@@ -164,6 +181,9 @@ export function createLlama(cfg, backend, { batch }) {
     setBatch: (inp, tgt) => { be.write(tokens, inp); be.write(targets, tgt); },
     initialParams,
     trainStep,
+    queueStep,
+    // Typische Matmul-Größen dieses Modells (für die Autotuning-Messung).
+    matmulShapes: () => ({ NT: [N, F, d], NN: [N, d, F], TN: [F, d, N] }),
     // Nur Loss + Gradienten, ohne Update (für Tests und Validierung).
     async lossAndGrads() { forward(); backward(); await be.flush(); return (await be.read(lossBuf))[0]; },
     async loss() { forward(); await be.flush(); return (await be.read(lossBuf))[0]; },

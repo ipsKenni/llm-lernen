@@ -141,12 +141,17 @@ export function init(root) {
       const r = await p2.trainer.benchmark(presets, cpuOnly ? 'cpu' : 'auto', S.tokenizer?.vocabSize ?? 2048);
       S.bench = r;
       const where = r.kind === 'webgpu' ? `WebGPU (${[r.adapter?.vendor, r.adapter?.architecture, r.adapter?.description].filter(Boolean).join(', ') || 'unbekannte GPU'})` : 'Prozessor (kein WebGPU)';
-      $('#bench-status').textContent = `Gemessen auf: ${where}. Reine Rechenleistung der Matrixmultiplikation: ${fmt(r.gflops, 1)} GFLOP/s.`;
+      const c = r.compare;
+      const cmp = c && !c.error
+        ? ` Die aktuelle Engine ${r.engine} ist bei „${PRESETS[c.preset].label}“ ${fmt(c.speedup, 2)}-mal so schnell wie Engine 1 (${int(c.oldMs)} → ${int(c.newMs)} ms pro Schritt).`
+        : '';
+      $('#bench-status').textContent = `Gemessen auf: ${where}. Reine Rechenleistung der Matrixmultiplikation: ${fmt(r.gflops, 1)} GFLOP/s.${cmp}`;
       benchText = [
         `Benchmark llm.ips.codes, Engine ${r.engine}, ${new Date().toLocaleString('de-DE')}`,
         `Gerät: ${where}`,
         `Matmul: ${fmt(r.gflops, 1)} GFLOP/s`,
-        ...r.results.map((e) => (e.error ? `${PRESETS[e.preset].label}: ${e.error}` : `${PRESETS[e.preset].label}: ${int(e.tokensPerSec)} Tokens/s, ${int(e.msPerStep)} ms/Schritt`)),
+        ...r.results.map((e) => (e.error ? `${PRESETS[e.preset].label}: ${e.error}` : `${PRESETS[e.preset].label}: ${int(e.tokensPerSec)} Tokens/s, ${int(e.msPerStep)} ms/Schritt${e.variant ? `, Matmul-Varianten ${JSON.stringify(e.variant)}` : ''}`)),
+        ...(r.compare && !r.compare.error ? [`Vergleich ${PRESETS[r.compare.preset].label}: Engine 1 ${int(r.compare.oldMs)} ms, Engine ${r.engine} ${int(r.compare.newMs)} ms pro Schritt (${fmt(r.compare.speedup, 2)}×)`] : []),
         `Browser: ${navigator.userAgent}`,
       ].join('\n');
       $('#bench-copy').hidden = false;
