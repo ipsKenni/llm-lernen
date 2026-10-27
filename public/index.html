@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Das kleinste LLM</title>
+  <meta name="description" content="Baue und trainiere ein winziges Sprachmodell Schritt für Schritt – komplett im Browser, ohne Bibliotheken.">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='2' width='28' height='28' rx='6' fill='%232B5FD0'/%3E%3Ctext x='16' y='22' font-family='monospace' font-size='18' font-weight='700' fill='white' text-anchor='middle'%3El%3C/text%3E%3C/svg%3E">
+  <link rel="preload" href="fonts/atkinson-next.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/atkinson-mono.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="js/main.js"></script>
+</head>
+<body>
+  <div class="boot-error" id="boot-error" role="alert" hidden></div>
+  <noscript><div class="boot-error">Diese Seite braucht JavaScript. Bitte aktiviere es für llm.ips.codes.</div></noscript>
+  <script>
+    // Klassisches Skript (kein Modul), läuft vor allem anderen: Wenn etwas
+    // schiefgeht, steht die Fehlermeldung sichtbar auf der Seite statt nur
+    // in der Konsole.
+    window.showBootError = function (msg) {
+      var box = document.getElementById('boot-error');
+      var p = document.createElement('p');
+      p.textContent = msg;
+      if (box.hidden) {
+        var h = document.createElement('strong');
+        h.textContent = 'Hier ist etwas schiefgelaufen. Schick mir diese Meldung:';
+        var ua = document.createElement('p');
+        ua.className = 'boot-error-ua';
+        ua.textContent = 'Browser: ' + navigator.userAgent;
+        box.append(h, ua);
+        box.hidden = false;
+      }
+      box.insertBefore(p, box.lastChild);
+    };
+    window.addEventListener('error', function (e) {
+      var where = e.filename ? ' (' + e.filename.split('/').pop() + ', Zeile ' + e.lineno + ')' : '';
+      window.showBootError((e.message || 'Unbekannter Fehler') + where);
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+      window.showBootError(String((e.reason && e.reason.message) || e.reason));
+    });
+    setTimeout(function () {
+      if (!window.llmBooted) window.showBootError('Die Seite ist nach 10 Sekunden noch nicht gestartet. Meist sperrt ein Werbeblocker eine der Skript-Dateien: Probier es ohne Werbeblocker für llm.ips.codes. Sonst konnte js/main.js nicht geladen werden.');
+    }, 10000);
+  </script>
+  <a class="skip" href="#main">Zum Inhalt springen</a>
+
+  <header class="masthead">
+    <a class="masthead-title" href="#0">
+      <h1 class="sr-only">Das kleinste LLM</h1>
+      <span class="title-tiles" id="title-tiles" aria-hidden="true"></span>
+    </a>
+    <p class="masthead-sub">Ein Sprachmodell von Grund auf gebaut und trainiert, in deinem Browser. Ohne Bibliotheken, jede Rechnung zum Nachlesen.</p>
+  </header>
+
+  <div class="layout">
+    <nav class="steps-nav" aria-label="Schritte">
+      <p class="nav-part" id="nav-part-1">Teil 1: Verstehen</p>
+      <ol aria-labelledby="nav-part-1">
+        <li><a href="#0" data-nav="0"><span class="step-no">0</span><span>Die Idee</span></a></li>
+        <li><a href="#1" data-nav="1"><span class="step-no">1</span><span>Zählen</span></a></li>
+        <li><a href="#2" data-nav="2"><span class="step-no">2</span><span>Ableiten</span></a></li>
+        <li><a href="#3" data-nav="3"><span class="step-no">3</span><span>Lernen</span></a></li>
+        <li><a href="#4" data-nav="4"><span class="step-no">4</span><span>Aufmerksamkeit</span></a></li>
+        <li><a href="#5" data-nav="5"><span class="step-no">5</span><span>Trainieren</span></a></li>
+        <li><a href="#6" data-nav="6"><span class="step-no">6</span><span>Generieren</span></a></li>
+      </ol>
+      <p class="nav-part" id="nav-part-2">Teil 2: Dein eigenes Modell</p>
+      <ol aria-labelledby="nav-part-2">
+        <li><a href="#7" data-nav="7"><span class="step-no">7</span><span>Tokenizer</span></a></li>
+        <li><a href="#8" data-nav="8"><span class="step-no">8</span><span>Bauplan</span></a></li>
+        <li><a href="#9" data-nav="9"><span class="step-no">9</span><span>Training</span></a></li>
+        <li><a href="#10" data-nav="10"><span class="step-no">10</span><span>Ab nach Ollama</span></a></li>
+        <li><a href="#11" data-nav="11"><span class="step-no">11</span><span>Wie geht es weiter?</span></a></li>
+      </ol>
+      <p class="nav-status" id="nav-status" aria-live="polite"></p>
+    </nav>
+
+    <main id="main" tabindex="-1">
+
+      <!-- ============================================================ 0 -->
+      <section class="step" data-step="0" aria-labelledby="h-0">
+        <h2 id="h-0">Ein Sprachmodell rät das nächste Zeichen</h2>
+        <p>ChatGPT, Claude und alle anderen großen Sprachmodelle machen im Kern genau eine Sache: Sie bekommen einen Text und berechnen für jedes mögliche nächste Token eine Wahrscheinlichkeit. Eins davon wird gezogen und angehängt, dann geht es von vorn los. Mehr passiert beim „Schreiben“ nicht.</p>
+        <p>Hier baust du so ein Modell selbst, und zwar das kleinste, das noch alle wichtigen Teile eines GPT hat. Es lernt aus 32.033 englischen Vornamen und erfindet danach eigene. Statt Wörtern sind unsere Tokens einzelne Buchstaben.</p>
+
+        <div class="panel">
+          <label class="field-label" for="idee-input">Tippe den Anfang eines Namens</label>
+          <input id="idee-input" class="text-input" type="text" value="em" maxlength="15" autocomplete="off" spellcheck="false">
+          <div class="tiles" id="idee-tiles"></div>
+          <p class="hint">Unter jedem Buchstaben steht seine Token-ID. Das Modell sieht nie Buchstaben, nur diese Zahlen. Die <code>0</code> ist ein Sonderzeichen: Der Punkt markiert Anfang und Ende eines Namens.</p>
+          <h3 class="panel-h" id="idee-bars-h">Was kommt nach „<span id="idee-last">m</span>“?</h3>
+          <div class="pbars" id="idee-bars" aria-labelledby="idee-bars-h"></div>
+          <p class="hint">Diese Vorhersage stammt vom Modell aus Schritt 1. Es schaut nur auf den letzten Buchstaben. Ein echtes LLM rechnet genauso, berücksichtigt aber den ganzen bisherigen Text.</p>
+        </div>
+
+        <h3>So ist die Seite aufgebaut</h3>
+        <p>Wir gehen in sieben Schritten vom Zählen bis zum Transformer. Jeder Schritt baut auf dem vorigen auf. Zu jedem Schritt gibt es den echten Quelltext: Er wird direkt aus den Dateien geladen, die in deinem Browser laufen. Hier der Tokenizer, der Text in Zahlen übersetzt:</p>
+        <div class="code" data-code="tokenizer.js#tokenizer"></div>
+      </section>
+
+      <!-- ============================================================ 1 -->
+      <section class="step" data-step="1" aria-labelledby="h-1" hidden>
+        <h2 id="h-1">Das einfachste Modell ist eine Tabelle</h2>
+        <p>Wir zählen in allen Namen, wie oft welches Zeichen auf welches folgt. Aus „emma“ wird <code>.e</code>, <code>em</code>, <code>mm</code>, <code>ma</code>, <code>a.</code>. Teilt man jede Zeile der Tabelle durch ihre Summe, erhält man Wahrscheinlichkeiten. Das ist ein vollständiges Sprachmodell. Man nennt es Bigram-Modell, weil es immer zwei Zeichen betrachtet.</p>
+
+        <div class="panel panel-split">
+          <div>
+            <h3 class="panel-h">Wie oft folgt welches Zeichen?</h3>
+            <canvas class="heatmap" id="count-heatmap" role="img" aria-label="Bigram-Häufigkeiten"></canvas>
+            <p class="hint">Zeile: aktuelles Zeichen. Spalte: nächstes Zeichen. Je dunkler, desto häufiger. Fahr über ein Feld für die genaue Zahl, klick eine Zeile an.</p>
+          </div>
+          <div>
+            <h3 class="panel-h">Nach „<span id="count-row-char">a</span>“ kommt …</h3>
+            <div class="pbars" id="count-row-bars"></div>
+          </div>
+        </div>
+
+        <h3>Namen erzeugen</h3>
+        <p>Beim Generieren starten wir beim Punkt, schauen in dessen Zeile und ziehen zufällig ein Zeichen gemäß den Wahrscheinlichkeiten. Dann schauen wir in die Zeile des gezogenen Zeichens und so weiter, bis wieder ein Punkt gezogen wird.</p>
+        <div class="panel">
+          <div class="toolbar">
+            <button class="btn btn-primary" id="sample-step">Nächstes Zeichen ziehen</button>
+            <button class="btn" id="sample-new">Neuen Namen beginnen</button>
+            <button class="btn" id="sample-ten">10 Namen auf einmal</button>
+          </div>
+          <div class="tiles" id="sample-tiles"></div>
+          <p class="readout" id="sample-readout" aria-live="polite">Noch nichts gezogen. Der Name beginnt beim Punkt.</p>
+          <div class="pbars" id="sample-bars"></div>
+          <ul class="name-list" id="sample-list" aria-label="Erzeugte Namen"></ul>
+        </div>
+        <p>Die Namen klingen ungefähr richtig, aber oft seltsam. Kein Wunder: Das Modell kennt nur das letzte Zeichen. Nach einem „a“ weiß es nicht, ob der Name gerade erst begonnen hat oder schon zwölf Buchstaben lang ist.</p>
+
+        <h3>Wie gut ist das Modell?</h3>
+        <p>Wir messen, welche Wahrscheinlichkeit das Modell den echten Daten gibt. Für jedes Zeichenpaar nehmen wir den negativen Logarithmus der Wahrscheinlichkeit und mitteln. Das ist der <strong>Loss</strong>. Ein perfektes Modell hätte Loss 0. Wer blind unter 27 Zeichen rät, kommt auf ln 27 ≈ 3,30. Unsere Tabelle schafft über alle Namen <strong id="count-loss">…</strong>.</p>
+        <div class="panel">
+          <label class="field-label" for="nll-input">Wie wahrscheinlich findet das Modell deinen Namen?</label>
+          <input id="nll-input" class="text-input" type="text" value="sven" maxlength="15" autocomplete="off" spellcheck="false">
+          <div class="table-wrap">
+            <table class="data-table" id="nll-table">
+              <thead><tr><th scope="col">Paar</th><th scope="col">Wahrscheinlichkeit</th><th scope="col">−log</th></tr></thead>
+              <tbody></tbody>
+              <tfoot><tr><th scope="row" colspan="2">Durchschnitt (Loss für diesen Namen)</th><td id="nll-avg"></td></tr></tfoot>
+            </table>
+          </div>
+        </div>
+
+        <h3>Der Code</h3>
+        <div class="code" data-code="bigram-count.js#bigram-zaehlen"></div>
+        <div class="code" data-code="bigram-count.js#bigram-loss"></div>
+      </section>
+
+      <!-- ============================================================ 2 -->
+      <section class="step" data-step="2" aria-labelledby="h-2" hidden>
+        <h2 id="h-2">Wie ein Netz lernt: Ableitungen, rückwärts gerechnet</h2>
+        <p>Zählen funktioniert nur für sehr kurzen Kontext. Neuronale Netze gehen anders vor: Sie haben Parameter, die anfangs zufällig sind und nach und nach so verschoben werden, dass der Loss sinkt. Dafür müssen wir für jeden Parameter wissen: <em>Wenn ich ihn ein kleines bisschen erhöhe, steigt oder fällt der Loss, und wie stark?</em> Diese Zahl heißt <strong>Gradient</strong>.</p>
+        <p>Der Trick: Jede Zahl wird in ein <code>Value</code>-Objekt verpackt, das sich merkt, aus welchen Zahlen es berechnet wurde. So entsteht beim Rechnen ein Graph. Danach laufen wir ihn rückwärts ab und wenden an jedem Knoten die Kettenregel an. Das ist Backpropagation. PyTorch macht genau dasselbe, nur mit ganzen Matrizen statt einzelnen Zahlen.</p>
+
+        <div class="panel">
+          <h3 class="panel-h">Ein Neuron mit Loss: L = (tanh(x₁·w₁ + x₂·w₂ + b) − y)²</h3>
+          <div class="sliders" id="ag-sliders"></div>
+          <div class="toolbar">
+            <button class="btn btn-primary" id="ag-step">Rückwärts: nächster Knoten</button>
+            <button class="btn" id="ag-all">Rückwärts: alles</button>
+            <button class="btn" id="ag-learn">Lernschritt (w₁, w₂, b anpassen)</button>
+            <button class="btn" id="ag-reset">Zurücksetzen</button>
+          </div>
+          <div class="legend">
+            <span class="legend-item"><span class="swatch swatch-fwd"></span>Wert (vorwärts berechnet)</span>
+            <span class="legend-item"><span class="swatch swatch-grad"></span>Gradient ∂L/∂Knoten (rückwärts berechnet)</span>
+          </div>
+          <div class="graph-wrap"><svg id="ag-graph" role="img" aria-label="Rechengraph des Neurons"></svg></div>
+          <p class="readout" id="ag-readout" aria-live="polite"></p>
+        </div>
+
+        <p>Bei einem Lernschritt wird jeder Parameter ein Stück gegen seinen Gradienten geschoben: <code>w ← w − 0,1 · ∂L/∂w</code>. Klick ein paar Mal auf „Lernschritt“ und beobachte, wie L kleiner wird und o sich dem Ziel y nähert. Genau so lernt später auch das GPT, nur mit 4.192 Parametern statt drei.</p>
+
+        <h3>Stimmt das auch? Gegenprobe mit Zahlen</h3>
+        <p>Man kann jeden Gradienten auch stumpf ausprobieren: Parameter um ein winziges h verschieben, L neu berechnen, Differenz durch 2h teilen. Das ist viel zu langsam für große Netze, aber eine perfekte Kontrolle.</p>
+        <div class="table-wrap">
+          <table class="data-table" id="ag-check">
+            <thead><tr><th scope="col">Parameter</th><th scope="col">Autograd</th><th scope="col">Numerisch</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <h3>Der Code</h3>
+        <div class="code" data-code="value.js#value-klasse"></div>
+        <div class="code" data-code="value.js#value-ops"></div>
+        <div class="code" data-code="value.js#value-backward"></div>
+      </section>
+
+      <!-- ============================================================ 3 -->
+      <section class="step" data-step="3" aria-labelledby="h-3" hidden>
+        <h2 id="h-3">Dieselbe Tabelle, diesmal gelernt</h2>
+        <p>Jetzt setzen wir Autograd auf ein echtes Problem an. Statt die Bigram-Tabelle zu zählen, lassen wir sie lernen: 27 × 27 = 729 Parameter, anfangs Zufall. Für jedes Zeichen ist seine Zeile in der Matrix die Rohbewertung („Logits“) aller möglichen Nachfolger. Softmax macht daraus Wahrscheinlichkeiten, der Cross-Entropy-Loss bestraft falsche Vorhersagen, und Backpropagation sagt jedem Parameter, in welche Richtung er sich bewegen soll.</p>
+
+        <div class="panel">
+          <div class="toolbar">
+            <button class="btn btn-primary" id="nb-run">Training starten</button>
+            <button class="btn" id="nb-step">Ein Schritt</button>
+            <button class="btn" id="nb-reset">Neu beginnen</button>
+            <label class="inline-field">Lernrate
+              <select id="nb-lr"><option>1</option><option>10</option><option selected>30</option><option>100</option><option>300</option></select>
+            </label>
+          </div>
+          <dl class="stats">
+            <div><dt>Schritt</dt><dd id="nb-stepno">0</dd></div>
+            <div><dt>Loss (aktuell)</dt><dd id="nb-loss">–</dd></div>
+            <div><dt>Zähl-Modell</dt><dd id="nb-target">–</dd></div>
+          </dl>
+          <canvas class="chart" id="nb-chart" role="img" aria-label="Loss-Verlauf des neuronalen Bigram-Modells"></canvas>
+          <div class="panel-split">
+            <div>
+              <h3 class="panel-h">Gelernt: softmax(W)</h3>
+              <canvas class="heatmap" id="nb-heat-learned" role="img" aria-label="Gelernte Wahrscheinlichkeiten"></canvas>
+            </div>
+            <div>
+              <h3 class="panel-h">Gezählt (Schritt 1)</h3>
+              <canvas class="heatmap" id="nb-heat-counted" role="img" aria-label="Gezählte Wahrscheinlichkeiten"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <p>Die gelernte Tabelle wird der gezählten immer ähnlicher, und der Loss nähert sich der gestrichelten Linie. Gradientenabstieg findet von selbst heraus, was wir in Schritt 1 abgezählt haben.</p>
+        <p>Probier verschiedene Lernraten aus. Bei 1 kriecht der Loss nur langsam nach unten. Bei 300 schießt jeder Schritt über das Ziel hinaus, und der Loss steigt sogar. Die richtige Lernrate zu finden ist auch bei echten LLMs eine der wichtigsten Stellschrauben.</p>
+
+        <h3>Der Code</h3>
+        <div class="code" data-code="nn.js#softmax"></div>
+        <div class="code" data-code="nn.js#cross-entropy"></div>
+        <div class="code" data-code="bigram-neural.js#bigram-train-step"></div>
+      </section>
+
+      <!-- ============================================================ 4 -->
+      <section class="step" data-step="4" aria-labelledby="h-4" hidden>
+        <h2 id="h-4">Mehr Kontext: Embeddings und Attention</h2>
+        <p>Das Bigram-Modell sieht nur ein Zeichen. Wollte man mit der Tabellen-Methode die letzten 15 Zeichen berücksichtigen, bräuchte man 27¹⁵ ≈ 3 · 10²¹ Zeilen, mehr als es Sandkörner auf der Erde gibt. Ein Transformer löst das mit zwei Ideen.</p>
+
+        <h3>Embeddings: jedes Token wird ein Vektor</h3>
+        <p>Jedes Token bekommt eine Liste von 16 gelernten Zahlen, seinen Embedding-Vektor. Ähnliche Zeichen, etwa die Vokale, landen nach dem Training bei ähnlichen Vektoren. Zusätzlich bekommt jede Position im Text einen eigenen Vektor, der addiert wird. So weiß das Modell, welches Zeichen es ist und wo es steht.</p>
+
+        <h3>Attention: Positionen tauschen Informationen aus</h3>
+        <p>An jeder Position berechnet das Modell drei Vektoren: eine <strong>Query</strong> (wonach suche ich?), einen <strong>Key</strong> (was biete ich an?) und einen <strong>Value</strong> (was gebe ich weiter?). Die Query wird mit den Keys aller vorherigen Positionen verglichen (Skalarprodukt). Softmax macht aus den Ergebnissen Gewichte, und die Ausgabe ist der gewichtete Mittelwert der Values. Zukünftige Positionen sind tabu, sonst könnte das Modell beim Training einfach abschreiben.</p>
+
+        <div class="panel">
+          <h3 class="panel-h">Attention zum Nachrechnen, mit 2 statt 16 Dimensionen</h3>
+          <p class="hint">Wähle die Position, die gerade „fragt“. Die Zahlen sind von Hand gewählt, damit man sie im Kopf nachrechnen kann.</p>
+          <div class="seg" id="att-pos" role="radiogroup" aria-label="Fragende Position"></div>
+          <label class="inline-field">Schärfe (Faktor auf die Scores)
+            <input type="range" id="att-sharp" min="0" max="4" step="0.1" value="1">
+            <output id="att-sharp-out">1,0</output>
+          </label>
+          <div class="table-wrap">
+            <table class="data-table" id="att-table">
+              <thead><tr><th scope="col">Position</th><th scope="col">Key k</th><th scope="col">Score q·k / √2</th><th scope="col">Gewicht (Softmax)</th><th scope="col">Value v</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p class="readout" id="att-readout"></p>
+        </div>
+
+        <h3>Der ganze Bauplan</h3>
+        <p>Ein GPT stapelt diese Bausteine. Klick einen Block an, um zu sehen, was er tut und wie er im Code aussieht.</p>
+        <div class="arch">
+          <div class="arch-left">
+            <ol class="arch-stack" id="arch-stack" aria-label="Schichten von unten (Eingabe) nach oben (Ausgabe)"></ol>
+            <p class="hint">Attention und MLP (links blau markiert) bilden zusammen einen Transformer-Block. Er wird n_layer-mal übereinander gestapelt.</p>
+            <p class="arch-helpers-title">Bausteine, die überall vorkommen</p>
+            <div class="arch-helpers" id="arch-helpers"></div>
+          </div>
+          <div class="arch-detail" id="arch-detail" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <!-- ============================================================ 5 -->
+      <section class="step" data-step="5" aria-labelledby="h-5" hidden>
+        <h2 id="h-5">Dein GPT trainieren</h2>
+        <p>Jetzt wird es ernst. Mit den Standardeinstellungen hat das Modell <strong id="gpt-param-inline">4.192</strong> Parameter. Pro Trainingsschritt entstehen rund 125.000 <code>Value</code>-Objekte, die vorwärts berechnet und rückwärts abgeleitet werden. 1.000 Schritte dauern je nach Rechner 10 bis 60 Sekunden.</p>
+
+        <div class="panel">
+          <fieldset class="config" id="gpt-config">
+            <legend class="sr-only">Einstellungen</legend>
+            <label class="inline-field">Daten
+              <select id="cfg-dataset">
+                <option value="names" selected>32.033 englische Vornamen</option>
+                <option value="cities">250 deutsche Städte</option>
+                <option value="custom">Eigene Liste</option>
+              </select>
+            </label>
+            <label class="inline-field">Breite (n_embd)
+              <select id="cfg-nEmbd"><option>8</option><option selected>16</option><option>24</option><option>32</option></select>
+            </label>
+            <label class="inline-field">Köpfe (n_head)
+              <select id="cfg-nHead"><option>1</option><option>2</option><option selected>4</option></select>
+            </label>
+            <label class="inline-field">Schichten (n_layer)
+              <select id="cfg-nLayer"><option selected>1</option><option>2</option><option>3</option></select>
+            </label>
+            <label class="inline-field">Lernrate
+              <select id="cfg-lr"><option>0.003</option><option selected>0.01</option><option>0.03</option></select>
+            </label>
+            <label class="inline-field">Wörter pro Schritt
+              <select id="cfg-batchSize"><option>1</option><option selected>4</option><option>8</option></select>
+            </label>
+            <label class="inline-field">Schritte
+              <select id="cfg-steps"><option>300</option><option selected>1000</option><option>3000</option></select>
+            </label>
+          </fieldset>
+          <div id="custom-data" hidden>
+            <label class="field-label" for="cfg-custom">Eine Zeile pro Wort. Großbuchstaben werden klein geschrieben.</label>
+            <textarea id="cfg-custom" class="text-input" rows="6" spellcheck="false"></textarea>
+          </div>
+          <p class="hint" id="gpt-param-count"></p>
+          <div class="toolbar">
+            <button class="btn btn-primary" id="gpt-run">Training starten</button>
+            <button class="btn" id="gpt-step">Ein Schritt</button>
+            <button class="btn" id="gpt-reset">Neu initialisieren</button>
+          </div>
+          <dl class="stats">
+            <div><dt>Schritt</dt><dd id="gpt-stepno">0</dd></div>
+            <div><dt>Loss (Mittel der letzten 50)</dt><dd id="gpt-loss">–</dd></div>
+            <div><dt>Schritte pro Sekunde</dt><dd id="gpt-speed">–</dd></div>
+          </dl>
+          <canvas class="chart" id="gpt-chart" role="img" aria-label="Loss-Verlauf des GPT-Trainings"></canvas>
+          <div class="legend">
+            <span class="legend-item"><span class="swatch swatch-line swatch-faint"></span>Loss pro Schritt</span>
+            <span class="legend-item"><span class="swatch swatch-line"></span>gleitender Mittelwert (50 Schritte)</span>
+            <span class="legend-item"><span class="swatch swatch-dash"></span>Vergleichswerte</span>
+          </div>
+          <h3 class="panel-h">Was das Modell während des Trainings erfindet</h3>
+          <ol class="sample-log" id="gpt-samples"></ol>
+          <div class="toolbar toolbar-quiet">
+            <button class="btn btn-small" id="gpt-export">Gewichte herunterladen</button>
+            <label class="btn btn-small" for="gpt-import">Gewichte laden</label>
+            <input type="file" id="gpt-import" accept="application/json,.json" class="sr-only">
+          </div>
+        </div>
+
+        <p>Achte auf die Beispiele: Am Anfang kommt Buchstabensalat, nach ein paar hundert Schritten entstehen aussprechbare Namen. Der Loss fällt unter den des Bigram-Modells, weil das GPT mehr als ein Zeichen Kontext nutzt. Das trainierte Modell wird in deinem Browser gespeichert, Schritt 6 arbeitet damit.</p>
+
+        <h3>Der Code</h3>
+        <div class="code" data-code="transformer.js#gpt-loss"></div>
+        <div class="code" data-code="transformer.js#gpt-train-step"></div>
+        <div class="code" data-code="transformer.js#gpt-adam"></div>
+      </section>
+
+      <!-- ============================================================ 6 -->
+      <section class="step" data-step="6" aria-labelledby="h-6" hidden>
+        <h2 id="h-6">Ins Modell hineinschauen</h2>
+        <div class="notice" id="gen-untrained">
+          <p>Hier gibt es noch kein trainiertes Modell. Trainiere es in Schritt 5 oder starte ein kurzes Training mit 300 Schritten.</p>
+          <div class="toolbar">
+            <button class="btn btn-primary" id="gen-quick">Kurz trainieren (300 Schritte)</button>
+            <a class="btn" href="#5">Zu Schritt 5</a>
+          </div>
+          <p class="readout" id="gen-quick-status" aria-live="polite"></p>
+        </div>
+
+        <div id="gen-main">
+          <p>Generieren heißt: Text ins Modell geben, Wahrscheinlichkeiten fürs nächste Token ablesen, eins ziehen, anhängen, wiederholen. Hier machst du das von Hand und siehst dabei, worauf die Attention-Köpfe achten.</p>
+          <div class="panel">
+            <div class="gen-controls">
+              <label class="field-label" for="gen-input">Anfang</label>
+              <input id="gen-input" class="text-input" type="text" value="" maxlength="15" autocomplete="off" spellcheck="false" placeholder="leer lassen oder z. B. „ma“">
+              <label class="inline-field">Temperatur
+                <input type="range" id="gen-temp" min="0.1" max="2" step="0.1" value="1">
+                <output id="gen-temp-out">1,0</output>
+              </label>
+            </div>
+            <div class="toolbar">
+              <button class="btn btn-primary" id="gen-step">Nächstes Zeichen ziehen</button>
+              <button class="btn" id="gen-finish">Namen fertig schreiben</button>
+              <button class="btn" id="gen-clear">Leeren</button>
+            </div>
+            <div class="tiles" id="gen-tiles"></div>
+            <p class="readout" id="gen-readout" aria-live="polite"></p>
+            <h3 class="panel-h">Wahrscheinlichkeiten fürs nächste Zeichen</h3>
+            <div class="pbars" id="gen-bars"></div>
+            <h3 class="panel-h">Attention: Worauf schaut jede Position?</h3>
+            <p class="hint">Zeile: die Position, die gerade rechnet. Spalte: die Position, auf die sie schaut. Jede Zeile summiert sich zu 100 %. Rechts oben ist alles leer, weil niemand in die Zukunft schauen darf.</p>
+            <div class="layer-select" id="gen-layer-wrap" hidden>
+              <label class="inline-field">Schicht <select id="gen-layer"></select></label>
+            </div>
+            <div class="att-grid" id="gen-attn"></div>
+          </div>
+
+          <h3>Temperatur</h3>
+          <p>Vor der Softmax werden die Logits durch die Temperatur geteilt. Unter 1 wird die Verteilung spitzer, das Modell wählt fast nur noch seine Favoriten und wiederholt sich. Über 1 wird sie flacher, die Namen werden kreativer, aber auch chaotischer. Chatbots nutzen genau diesen Regler.</p>
+          <div class="panel">
+            <div class="toolbar">
+              <button class="btn btn-primary" id="gen-ten">20 Namen erzeugen</button>
+            </div>
+            <ul class="name-list" id="gen-list" aria-label="Erzeugte Namen"></ul>
+            <p class="hint">Fett gesetzte Namen kommen in den Trainingsdaten nicht vor, die hat das Modell erfunden. Die anderen hat es (zufällig oder auswendig) reproduziert.</p>
+          </div>
+
+          <h3>Der Code</h3>
+          <div class="code" data-code="transformer.js#gpt-generate"></div>
+        </div>
+      </section>
+
+      <!-- ============================================================ 7 -->
+      <section class="step" data-step="7" aria-labelledby="h-7" hidden>
+        <h2 id="h-7">Ein Tokenizer wie bei echten LLMs</h2>
+        <div class="part-intro">
+          <p>In Teil 2 baust du ein Modell, das du am Ende herunterlädst und in Ollama auf deinem Rechner benutzt. Es hat denselben Aufbau wie Llama, trainiert auf deiner Grafikkarte und wird als GGUF-Datei gespeichert, genau wie die Modelle, die du sonst mit <code>ollama pull</code> holst. Der Weg führt über vier Schritte: Tokenizer, Bauplan, Training und Export.</p>
+        </div>
+        <p>In Teil 1 war jeder Buchstabe ein Token. Echte LLMs fassen häufige Zeichenfolgen zusammen: Aus „<code>␣und</code>“ (mit Leerzeichen davor) oder „<code>ch</code>“ wird jeweils ein einziges Token. Die Texte werden dadurch kürzer, und das Modell arbeitet mit größeren Bausteinen. Das Verfahren heißt <strong>Byte-Pair-Encoding</strong> (BPE): Man startet mit den 256 möglichen Bytes und verschmilzt immer wieder das häufigste benachbarte Paar zu einem neuen Token. Die Liste dieser Verschmelzungen ist der Tokenizer.</p>
+
+        <div class="panel">
+          <h3 class="panel-h" id="ds-h">Worauf soll dein Modell trainieren?</h3>
+          <div class="choice-grid" id="ds-choices" role="radiogroup" aria-labelledby="ds-h"></div>
+          <div id="ds-upload" hidden>
+            <label class="field-label" for="ds-file">Textdatei auswählen (.txt, UTF-8)</label>
+            <input type="file" id="ds-file" accept=".txt,text/plain">
+            <p class="hint" id="ds-upload-info">Am besten ab 200 KB Text. Absätze, die durch eine Leerzeile getrennt sind, werden zu einzelnen Dokumenten; bei Listen mit kurzen Zeilen ist jede Zeile ein Dokument. Die Datei bleibt in deinem Browser.</p>
+          </div>
+          <div class="toolbar">
+            <label class="inline-field">Vokabulargröße
+              <select id="bpe-vocab"><option>512</option><option>1024</option><option selected>2048</option><option>4096</option></select>
+            </label>
+            <button class="btn btn-primary" id="bpe-run">Tokenizer trainieren</button>
+          </div>
+          <p class="readout" id="bpe-status" aria-live="polite"></p>
+          <dl class="stats" id="bpe-stats" hidden>
+            <div><dt>Tokens im Vokabular</dt><dd id="bpe-s-vocab"></dd></div>
+            <div><dt>Dokumente</dt><dd id="bpe-s-docs"></dd></div>
+            <div><dt>Trainings-Tokens</dt><dd id="bpe-s-tokens"></dd></div>
+            <div><dt>Zeichen pro Token</dt><dd id="bpe-s-ratio"></dd></div>
+          </dl>
+          <div id="bpe-merges-wrap" hidden>
+            <h3 class="panel-h">Die ersten Verschmelzungen, in der Reihenfolge, in der sie gelernt wurden</h3>
+            <ol class="merge-list" id="bpe-merges"></ol>
+          </div>
+        </div>
+
+        <div class="panel" id="bpe-try-panel" hidden>
+          <label class="field-label" for="bpe-try">Probier einen Satz</label>
+          <input id="bpe-try" class="text-input text-input-wide" type="text" autocomplete="off" spellcheck="false">
+          <div class="tok-strip" id="bpe-try-out"></div>
+          <p class="hint" id="bpe-try-info"></p>
+        </div>
+
+        <h3>Der Code</h3>
+        <div class="code" data-code="llama/bpe.js#bpe-pretokenize"></div>
+        <div class="code" data-code="llama/bpe.js#bpe-train"></div>
+        <div class="code" data-code="llama/bpe.js#bpe-encode"></div>
+      </section>
+
+      <!-- ============================================================ 8 -->
+      <section class="step" data-step="8" aria-labelledby="h-8" hidden>
+        <h2 id="h-8">Der Bauplan: so aufgebaut wie Llama</h2>
+        <p>Im Kern ist es dasselbe Modell wie in Teil 1: Embeddings, Attention, MLP, Residual-Verbindungen und Softmax. Seit GPT-2 haben sich aber einige Bausteine durchgesetzt, die heute in fast allen offenen Modellen stecken, von Llama über Mistral bis Qwen. Genau diese verwenden wir. Nur dann kann Ollama dein Modell direkt laden.</p>
+        <div class="table-wrap">
+          <table class="data-table compare">
+            <thead><tr><th scope="col">Baustein</th><th scope="col">Teil 1 (GPT)</th><th scope="col">Teil 2 (Llama)</th><th scope="col">Warum</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">Tokens</th><td>Buchstaben</td><td>BPE auf Bytes</td><td>kürzere Texte, jede Eingabe darstellbar</td></tr>
+              <tr><th scope="row">Position</th><td>gelernter Positionsvektor</td><td>RoPE (Drehung)</td><td>Attention sieht direkt den Abstand zweier Tokens</td></tr>
+              <tr><th scope="row">Normalisierung</th><td>RMSNorm ohne Gewicht</td><td>RMSNorm mit gelerntem Gewicht</td><td>jede Dimension bekommt ihre eigene Stärke</td></tr>
+              <tr><th scope="row">MLP</th><td>ReLU</td><td>SwiGLU (mit Tor)</td><td>lernt bei gleicher Größe besser</td></tr>
+              <tr><th scope="row">Attention</th><td>jeder Kopf mit eigenen Keys und Values</td><td>Grouped-Query-Attention</td><td>mehrere Köpfe teilen sich Keys und Values, das spart Speicher</td></tr>
+              <tr><th scope="row">Ausgabe</th><td>eigene Ausgabematrix</td><td>Weight Tying</td><td>die Embedding-Matrix dient auch als Ausgabe, das spart Parameter</td></tr>
+              <tr><th scope="row">Rechnen</th><td>einzelne Value-Objekte</td><td>Tensoren auf der GPU (WebGPU)</td><td>mehr als tausendmal schneller</td></tr>
+              <tr><th scope="row">Optimierer</th><td>Adam</td><td>AdamW, Warmup, Kosinus, Clipping</td><td>stabiles Training auch bei größeren Modellen</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>RoPE: die Position als Drehung</h3>
+        <p>Statt einen Positionsvektor zu addieren, dreht RoPE Query und Key um einen Winkel, der mit der Position wächst. Das Skalarprodukt zweier gedrehter Vektoren hängt dann nur davon ab, wie weit die beiden Tokens auseinanderliegen, nicht davon, wo sie im Text stehen. Probier es aus: Verschieb beide Positionen um denselben Betrag, der Score bleibt gleich.</p>
+        <div class="panel">
+          <div class="rope-demo">
+            <svg id="rope-svg" viewBox="-110 -110 220 220" role="img" aria-label="Query- und Key-Vektor nach der Drehung"></svg>
+            <div>
+              <label class="slider"><span>m</span><input type="range" id="rope-m" min="0" max="20" step="1" value="6"><output id="rope-m-out">6</output></label>
+              <p class="hint">Position der Query (des Tokens, das gerade fragt)</p>
+              <label class="slider"><span>n</span><input type="range" id="rope-n" min="0" max="20" step="1" value="1"><output id="rope-n-out">1</output></label>
+              <p class="hint">Position des Keys (des Tokens, auf das geschaut wird)</p>
+              <p class="readout" id="rope-readout" aria-live="polite"></p>
+            </div>
+          </div>
+        </div>
+
+        <h3 id="preset-h">Wie groß soll dein Modell werden?</h3>
+        <p class="readout" id="arch-gpu"></p>
+        <div class="choice-grid" id="preset-choices" role="radiogroup" aria-labelledby="preset-h"></div>
+        <p class="hint" id="preset-info"></p>
+
+        <h3>Der Code</h3>
+        <div class="code" data-code="llama/config.js#llama-layout"></div>
+        <div class="code" data-code="llama/model.js#llama-forward"></div>
+        <div class="code" data-code="llama/backend-cpu.js#cpu-rope"></div>
+        <div class="code" data-code="llama/backend-cpu.js#cpu-swiglu"></div>
+        <div class="code" data-code="llama/backend-cpu.js#cpu-attention"></div>
+        <div class="code" data-code="llama/backend-webgpu.js#webgpu-matmul"></div>
+      </section>
+
+      <!-- ============================================================ 9 -->
+      <section class="step" data-step="9" aria-labelledby="h-9" hidden>
+        <h2 id="h-9">Training wie bei den Großen</h2>
+        <p>Das Prinzip kennst du aus Teil 1: vorwärts rechnen, Loss bestimmen, rückwärts ableiten, Gewichte anpassen. Für größere Modelle kommen vier Zutaten dazu, ohne die Training schnell instabil wird:</p>
+        <dl class="glossary">
+          <dt>AdamW</dt>
+          <dd>Adam mit „Weight Decay“: Alle Gewichtsmatrizen schrumpfen bei jedem Schritt ein wenig. Das verhindert, dass einzelne Gewichte riesig werden.</dd>
+          <dt>Warmup und Kosinus</dt>
+          <dd>Die Lernrate startet bei fast 0, steigt kurz an und sinkt dann langsam auf 10 % (unten als Kurve). Am Anfang sind die Gradienten chaotisch, am Ende braucht es feine Schritte.</dd>
+          <dt>Gradient Clipping</dt>
+          <dd>Wird die Gesamtlänge aller Gradienten größer als 1, wird sie auf 1 gekürzt. Ein einzelner ungünstiger Batch kann das Modell dann nicht ruinieren.</dd>
+          <dt>Validierung</dt>
+          <dd>5 % der Texte sieht das Modell beim Training nie. Der Loss darauf zeigt, ob es wirklich Sprache lernt oder nur auswendig lernt.</dd>
+        </dl>
+
+        <div class="notice" id="tr-none">
+          <p>Zuerst brauchst du einen Tokenizer (Schritt 7) und eine Modellgröße (Schritt 8).</p>
+          <div class="toolbar"><a class="btn btn-primary" href="#7">Zu Schritt 7</a></div>
+        </div>
+        <div class="panel" id="tr-panel" hidden>
+          <p class="readout" id="tr-summary"></p>
+          <div class="toolbar">
+            <label class="inline-field">Schritte
+              <select id="tr-steps"><option>300</option><option>1000</option><option selected>2000</option><option>5000</option><option>10000</option></select>
+            </label>
+            <button class="btn btn-primary" id="tr-run">Training starten</button>
+            <button class="btn" id="tr-reset">Neu beginnen</button>
+          </div>
+          <dl class="stats">
+            <div><dt>Schritt</dt><dd id="tr-step">0</dd></div>
+            <div><dt>Train-Loss</dt><dd id="tr-loss">–</dd></div>
+            <div><dt>Val-Loss</dt><dd id="tr-val">–</dd></div>
+            <div><dt>Tokens pro Sekunde</dt><dd id="tr-speed">–</dd></div>
+            <div><dt>Restzeit</dt><dd id="tr-eta">–</dd></div>
+          </dl>
+          <canvas class="chart" id="tr-chart" role="img" aria-label="Verlauf von Trainings- und Validierungs-Loss"></canvas>
+          <div class="legend">
+            <span class="legend-item"><span class="swatch swatch-line swatch-faint"></span>Train-Loss pro Schritt</span>
+            <span class="legend-item"><span class="swatch swatch-line"></span>Train-Loss, geglättet</span>
+            <span class="legend-item"><span class="swatch swatch-line swatch-val"></span>Val-Loss (unbekannte Texte)</span>
+          </div>
+          <h3 class="panel-h">Lernrate über das Training (in Tausendsteln)</h3>
+          <canvas class="chart" id="tr-lr" role="img" aria-label="Verlauf der Lernrate"></canvas>
+          <h3 class="panel-h">Was das Modell unterwegs schreibt</h3>
+          <ol class="sample-log sample-log-wide" id="tr-samples"></ol>
+          <p class="hint" id="tr-saved"></p>
+        </div>
+
+        <p>So liest du die Kurven: Ein Loss von ln(Vokabulargröße), also etwa 7,6 bei 2.048 Tokens, heißt reines Raten. Alles darunter hat das Modell gelernt. Fällt der Train-Loss weiter, während der Val-Loss wieder steigt, lernt das Modell auswendig. Dann ist es Zeit aufzuhören, oder du brauchst mehr Daten.</p>
+        <p>Das Training wird jede Minute und am Ende in deinem Browser gespeichert. Du kannst die Seite schließen und später weitermachen.</p>
+
+        <h3>Der Code</h3>
+        <div class="code" data-code="llama/trainer-worker.js#llama-train-loop"></div>
+        <div class="code" data-code="llama/model.js#llama-step"></div>
+        <div class="code" data-code="llama/data.js#llama-schedule"></div>
+        <div class="code" data-code="llama/model.js#llama-backward"></div>
+        <div class="code" data-code="llama/backend-cpu.js#cpu-adamw"></div>
+      </section>
+
+      <!-- ============================================================ 10 -->
+      <section class="step" data-step="10" aria-labelledby="h-10" hidden>
+        <h2 id="h-10">Testen und in Ollama benutzen</h2>
+        <div class="notice" id="ex-none">
+          <p>Hier gibt es noch nichts zu testen. Trainiere zuerst ein Modell in Schritt 9. Ein paar hundert Schritte reichen für einen ersten Eindruck.</p>
+          <div class="toolbar"><a class="btn btn-primary" href="#9">Zu Schritt 9</a></div>
+        </div>
+        <div id="ex-main" hidden>
+          <p>Dein Modell setzt Text fort. Gib einen Anfang vor und lass es weiterschreiben. Diese Rechnung läuft Token für Token mit KV-Cache, genau wie in Ollama.</p>
+          <div class="panel">
+            <label class="field-label" for="ex-prompt">Anfang</label>
+            <textarea id="ex-prompt" class="text-input" rows="2" spellcheck="false"></textarea>
+            <div class="sliders">
+              <label class="slider"><span>Temp.</span><input type="range" id="ex-temp" min="0" max="1.5" step="0.05" value="0.8"><output id="ex-temp-out"></output></label>
+              <label class="slider"><span>Top-k</span><input type="range" id="ex-topk" min="1" max="100" step="1" value="40"><output id="ex-topk-out"></output></label>
+              <label class="slider"><span>Top-p</span><input type="range" id="ex-topp" min="0.5" max="1" step="0.01" value="0.95"><output id="ex-topp-out"></output></label>
+              <label class="slider"><span>Länge</span><input type="range" id="ex-len" min="10" max="250" step="10" value="120"><output id="ex-len-out"></output></label>
+            </div>
+            <div class="toolbar"><button class="btn btn-primary" id="ex-gen">Weiterschreiben</button></div>
+            <div class="gen-output" id="ex-out" aria-live="polite"></div>
+            <p class="hint">Temperatur 0 nimmt immer das wahrscheinlichste Token. Top-k und Top-p schneiden unwahrscheinliche Kandidaten ab, bevor gezogen wird. Ollama nutzt dieselben Regler.</p>
+          </div>
+
+          <h3>Herunterladen</h3>
+          <div class="panel">
+            <label class="field-label" for="ex-name">Name deines Modells in Ollama</label>
+            <input id="ex-name" class="text-input" type="text" autocomplete="off" spellcheck="false" maxlength="40">
+            <p class="hint">Kleinbuchstaben, Ziffern und Bindestriche.</p>
+            <div class="toolbar">
+              <button class="btn btn-primary" id="ex-gguf">GGUF-Datei herunterladen</button>
+              <button class="btn" id="ex-modelfile">Modelfile herunterladen</button>
+            </div>
+            <p class="readout" id="ex-status" aria-live="polite"></p>
+            <details class="meta-details" id="ex-meta-wrap" hidden>
+              <summary>Was in der GGUF-Datei steht</summary>
+              <div class="table-wrap"><table class="data-table"><tbody id="ex-meta"></tbody></table></div>
+            </details>
+          </div>
+
+          <h3>In Ollama starten</h3>
+          <ol class="howto">
+            <li>Falls noch nicht geschehen: <a href="https://ollama.com/download" target="_blank" rel="noopener">Ollama installieren</a>.</li>
+            <li>Lege beide Dateien in denselben Ordner, zum Beispiel „Downloads“, und öffne dort ein Terminal.
+              <div class="seg os-tabs" id="ex-os" role="radiogroup" aria-label="Betriebssystem"></div>
+            </li>
+            <li>Modell anlegen, dann starten:
+              <div class="cmd" id="ex-cmds"></div>
+            </li>
+          </ol>
+
+          <h3>Prüfen, dass Ollama genau dein Modell rechnet</h3>
+          <p>Mit Temperatur 0 gibt es keinen Zufall mehr. Dann muss Ollama Wort für Wort dasselbe schreiben wie diese Seite. Starte dafür <code>ollama run</code> ohne Text und tippe nacheinander:</p>
+          <div class="cmd" id="ex-check-cmds"></div>
+          <p>Erwartete Ausgabe: <q class="ref-output" id="ex-ref">…</q></p>
+          <p class="hint">Willst du einen weiteren Anfang testen, tippe vorher <code>/clear</code>. Sonst schreibt Ollama den bisherigen Verlauf mit in den Kontext. Bei einem noch wenig trainierten Modell wiederholt sich der Text bei Temperatur 0 oft. Kommt dasselbe Token rund 30-mal hintereinander, bricht Ollama absichtlich ab, als Schutz vor Endlosschleifen. Bis dahin muss der Text identisch sein.</p>
+
+          <h3>Der Code</h3>
+          <div class="code" data-code="llama/gguf.js#gguf-metadata"></div>
+          <div class="code" data-code="llama/gguf.js#gguf-write"></div>
+          <div class="code" data-code="llama/gguf.js#gguf-modelfile"></div>
+          <div class="code" data-code="llama/infer.js#infer-step"></div>
+          <div class="code" data-code="llama/infer.js#infer-sample"></div>
+        </div>
+      </section>
+
+      <!-- ============================================================ 11 -->
+      <section class="step" data-step="11" aria-labelledby="h-11" hidden>
+        <h2 id="h-11">Vom Spielzeug zum echten LLM</h2>
+        <p>Du hast jedes Teil eines GPT gesehen, ein Llama-Modell selbst trainiert und in Ollama zum Laufen gebracht. Ein großes Modell wie GPT-4 oder Claude unterscheidet sich vor allem in der Größe, kaum im Prinzip.</p>
+        <div class="table-wrap">
+          <table class="data-table compare">
+            <thead><tr><th scope="col"></th><th scope="col">Teil 1</th><th scope="col">Teil 2</th><th scope="col">Großes LLM (Größenordnung)</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">Parameter</th><td>4.192</td><td>0,1 bis 14 Millionen</td><td>Hunderte Milliarden bis Billionen</td></tr>
+              <tr><th scope="row">Vokabular</th><td>27 Zeichen</td><td>512 bis 4.096 BPE-Tokens</td><td>100.000 bis 200.000 BPE-Tokens</td></tr>
+              <tr><th scope="row">Kontext</th><td>16 Zeichen</td><td>64 bis 256 Tokens</td><td>Hunderttausende Tokens</td></tr>
+              <tr><th scope="row">Schichten</th><td>1</td><td>2 bis 8</td><td>Dutzende bis über hundert</td></tr>
+              <tr><th scope="row">Trainingsdaten</th><td>228 KB Namen</td><td>bis 5 MB Text</td><td>Billionen Tokens Text und Code</td></tr>
+              <tr><th scope="row">Rechenzeit</th><td>Sekunden</td><td>Minuten auf deiner GPU</td><td>Monate auf zehntausenden GPUs</td></tr>
+              <tr><th scope="row">Rechnet mit</th><td>einzelnen Zahlen (Value)</td><td>Float32-Tensoren (WebGPU)</td><td>Tensoren in bf16 oder fp8</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Was genau gleich bleibt</h3>
+        <p>BPE-Tokens, Embeddings, RoPE, Attention mit Query, Key und Value, SwiGLU, Residual-Verbindungen, RMSNorm, Softmax, Cross-Entropy-Loss, Backpropagation, AdamW und das Ziehen des nächsten Tokens. All das hast du hier in Aktion gesehen. Dein exportiertes Modell hat sogar dasselbe Dateiformat wie die großen offenen Modelle.</p>
+
+        <h3>Was noch dazukommt</h3>
+        <dl class="glossary">
+          <dt>Skalierung</dt>
+          <dd>Mehr Parameter, mehr Daten und viel mehr Rechenzeit, verteilt auf tausende GPUs. Daher kommt der Großteil der Fähigkeiten großer Modelle.</dd>
+          <dt>Pretraining</dt>
+          <dd>Das, was du in Schritt 9 gemacht hast, nur mit einem großen Teil des Internets: Das Modell lernt, Text fortzusetzen.</dd>
+          <dt>Quantisierung</dt>
+          <dd>Gewichte werden mit 4 oder 8 statt 32 Bit gespeichert. So passen große Modelle in den Speicher normaler Rechner. Ollama nutzt das standardmäßig.</dd>
+          <dt>Fine-Tuning und RLHF</dt>
+          <dd>Danach wird das Modell mit Beispieldialogen und menschlichem Feedback so nachtrainiert, dass es hilfreich antwortet statt nur Text fortzusetzen.</dd>
+        </dl>
+
+        <h3>Zum Weiterlernen</h3>
+        <ul class="links">
+          <li><a href="https://github.com/karpathy/micrograd" target="_blank" rel="noopener">micrograd</a>: das Autograd aus Schritt 2, in Python</li>
+          <li><a href="https://github.com/karpathy/makemore" target="_blank" rel="noopener">makemore</a>: von Bigram bis Transformer für Namen, die Quelle unseres Datensatzes</li>
+          <li><a href="https://github.com/karpathy/nanoGPT" target="_blank" rel="noopener">nanoGPT</a>: ein echtes GPT-2 mit PyTorch, auf einer GPU trainierbar</li>
+          <li><a href="https://karpathy.ai/zero-to-hero.html" target="_blank" rel="noopener">Neural Networks: Zero to Hero</a>: Andrej Karpathys Videokurs, der genau diesen Weg geht</li>
+        </ul>
+        <p>Den kompletten Quelltext findest du unter <a href="js/value.js">value.js</a> und <a href="js/transformer.js">transformer.js</a> (Teil 1) sowie im Ordner <a href="js/llama/model.js">js/llama/</a> (Teil 2). Alles ist ohne Bibliotheken geschrieben und ausführlich kommentiert.</p>
+      </section>
+
+      <nav class="pager" aria-label="Schritt wechseln">
+        <a class="pager-link pager-prev" id="pager-prev" href="#0"></a>
+        <a class="pager-link pager-next" id="pager-next" href="#1"></a>
+      </nav>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <p>Datensätze: <code>names.txt</code> aus <a href="https://github.com/karpathy/makemore" target="_blank" rel="noopener">karpathy/makemore</a> (MIT-Lizenz); „Deutsche Märchen gesammelt durch die Brüder Grimm“ aus <a href="https://www.gutenberg.org/ebooks/77905" target="_blank" rel="noopener">Projekt Gutenberg</a> (gemeinfrei); ein Ausschnitt aus <a href="https://huggingface.co/datasets/roneneldan/TinyStories" target="_blank" rel="noopener">TinyStories</a> von Eldan und Li (<a href="https://cdla.dev/sharing-1-0/" target="_blank" rel="noopener">CDLA-Sharing-1.0</a>). Aufbau inspiriert von Andrej Karpathys micrograd, microgpt und llama2.c. Schrift: Atkinson Hyperlegible vom Braille Institute. Alles läuft lokal in deinem Browser, es werden keine Daten verschickt.</p>
+  </footer>
+</body>
+</html>

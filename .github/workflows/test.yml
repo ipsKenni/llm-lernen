@@ -1,0 +1,18 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Node-Tests (Autograd, Gradient-Check, BPE, Modell, GGUF)
+        run: npm test
+      - name: Werbeblocker-Check der Dateinamen
+        run: python3 tools/adblock_check.py

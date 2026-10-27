@@ -1,0 +1,11 @@
+{
+  "name": "llm-lernen",
+  "private": true,
+  "type": "module",
+  "description": "Das kleinste LLM – interaktiv im Browser, ohne Bibliotheken",
+  "scripts": {
+    "test": "node --test",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  }
+}

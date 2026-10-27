@@ -1,0 +1,14 @@
+{
+  "$schema": "https://unpkg.com/wrangler@4.151.1/config-schema.json",
+  // Reine statische Seite: kein Worker-Code, Cloudflare liefert nur die Dateien aus public/ aus.
+  "name": "llm-lernen",
+  "compatibility_date": "2026-10-19",
+  "assets": {
+    "directory": "./public"
+  },
+  "routes": [
+    { "pattern": "llm.ips.codes", "custom_domain": true }
+  ],
+  "workers_dev": false,
+  "preview_urls": false
+}
